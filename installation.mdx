@@ -1,0 +1,258 @@
+---
+title: Installation
+description: Install Nest Dart packages for your Flutter, Dart Frog, or pure Dart applications
+---
+
+# Installation
+
+Nest Dart provides three packages depending on your platform. Choose the package that matches your project type.
+
+## Requirements
+
+<Note>
+  All Nest Dart packages require Dart SDK **3.8.1** or higher.
+</Note>
+
+- **Dart SDK**: ^3.8.1
+- **Flutter**: Latest stable version (for nest_flutter)
+- **Dart Frog**: ^1.1.0 (for nest_frog)
+
+## Choose your package
+
+<CardGroup cols={3}>
+  <Card title="nest_core" icon="cube">
+    For pure Dart applications and CLI tools
+  </Card>
+  <Card title="nest_flutter" icon="mobile">
+    For Flutter mobile and web applications
+  </Card>
+  <Card title="nest_frog" icon="frog">
+    For Dart Frog backend applications
+  </Card>
+</CardGroup>
+
+## Installing nest_core
+
+Use `nest_core` for pure Dart applications, command-line tools, or as the foundation for other packages.
+
+<Steps>
+  <Step title="Add dependency">
+    Add `nest_core` to your `pubspec.yaml`:
+
+    ```yaml pubspec.yaml
+    dependencies:
+      nest_core: ^0.1.1
+    ```
+  </Step>
+  <Step title="Install packages">
+    Run the following command to install:
+
+    ```bash
+    dart pub get
+    ```
+  </Step>
+  <Step title="Import the package">
+    Import `nest_core` in your Dart files:
+
+    ```dart
+    import 'package:nest_core/nest_core.dart';
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  `nest_core` is automatically included when you install `nest_flutter` or `nest_frog`, so you don't need to add it separately for those platforms.
+</Tip>
+
+## Installing nest_flutter
+
+Use `nest_flutter` for Flutter applications on mobile, web, desktop, or any Flutter-supported platform.
+
+<Steps>
+  <Step title="Add dependencies">
+    Add `nest_flutter` to your `pubspec.yaml`:
+
+    ```yaml pubspec.yaml
+    dependencies:
+      flutter:
+        sdk: flutter
+      nest_flutter: ^0.1.3
+    ```
+  </Step>
+  <Step title="Install packages">
+    Run the following command to install:
+
+    ```bash
+    flutter pub get
+    ```
+  </Step>
+  <Step title="Import the package">
+    Import `nest_flutter` in your Dart files:
+
+    ```dart
+    import 'package:nest_flutter/nest_flutter.dart';
+    ```
+  </Step>
+</Steps>
+
+### Flutter platform support
+
+`nest_flutter` works on all Flutter platforms:
+
+- ✅ Android
+- ✅ iOS
+- ✅ Web
+- ✅ macOS
+- ✅ Windows
+- ✅ Linux
+
+### Additional dependencies
+
+<Note>
+  `nest_flutter` includes `go_router` for routing integration. If you need additional routing features, refer to the [go_router documentation](https://pub.dev/packages/go_router).
+</Note>
+
+The package automatically includes:
+- `nest_core` - Core dependency injection system
+- `go_router` - Declarative routing for Flutter
+
+## Installing nest_frog
+
+Use `nest_frog` for Dart Frog backend applications and REST APIs.
+
+<Steps>
+  <Step title="Add dependencies">
+    Add `nest_frog` to your `pubspec.yaml`:
+
+    ```yaml pubspec.yaml
+    dependencies:
+      nest_frog: ^0.1.2
+      dart_frog: ^1.1.0
+    ```
+  </Step>
+  <Step title="Install packages">
+    Run the following command to install:
+
+    ```bash
+    dart pub get
+    ```
+  </Step>
+  <Step title="Import the package">
+    Import `nest_frog` in your Dart files:
+
+    ```dart
+    import 'package:nest_frog/nest_frog.dart';
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Make sure you have Dart Frog CLI installed. If not, install it globally:
+  
+  ```bash
+  dart pub global activate dart_frog_cli
+  ```
+</Warning>
+
+### Backend dependencies
+
+The package automatically includes:
+- `nest_core` - Core dependency injection system
+- `dart_frog` - Fast, minimalistic backend framework
+
+## Multiple packages
+
+If you're building a full-stack Dart application, you can use multiple Nest Dart packages in different projects:
+
+<CodeGroup>
+```yaml Flutter App (pubspec.yaml)
+dependencies:
+  flutter:
+    sdk: flutter
+  nest_flutter: ^0.1.3
+```
+
+```yaml Backend API (pubspec.yaml)
+dependencies:
+  nest_frog: ^0.1.2
+  dart_frog: ^1.1.0
+```
+
+```yaml Shared Package (pubspec.yaml)
+dependencies:
+  nest_core: ^0.1.1
+```
+</CodeGroup>
+
+<Tip>
+  You can create a shared package with `nest_core` that contains common business logic and services, then use it in both your Flutter app and Dart Frog backend.
+</Tip>
+
+## Verify installation
+
+After installation, verify that everything is working by creating a simple module:
+
+```dart
+import 'package:nest_core/nest_core.dart';
+
+class TestModule extends Module {
+  @override
+  void providers(Locator locator) {
+    print('Nest Dart installed successfully!');
+  }
+}
+
+void main() async {
+  final container = ApplicationContainer();
+  await container.registerModule(TestModule());
+}
+```
+
+Run the file:
+
+```bash
+dart run your_file.dart
+```
+
+You should see the success message printed to the console.
+
+## Next steps
+
+<Steps>
+  <Step title="Quick start">
+    Follow the [quickstart guide](/quickstart) to build your first application
+  </Step>
+  <Step title="Learn core concepts">
+    Understand [modules and dependency injection](/core/modules)
+  </Step>
+  <Step title="Platform guides">
+    Explore [Flutter](/platforms/flutter) or [Dart Frog](/platforms/dart-frog) specific features
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Version conflicts
+
+If you encounter version conflicts, ensure your Dart SDK version meets the minimum requirement:
+
+```bash
+dart --version
+```
+
+Should output version 3.8.1 or higher.
+
+### Dependency resolution issues
+
+If `pub get` fails, try clearing your pub cache:
+
+```bash
+dart pub cache clean
+dart pub get
+```
+
+### Need help?
+
+<Card title="GitHub Issues" icon="github" href="https://github.com/khode-io/nest-dart/issues">
+  Report issues or ask questions on GitHub
+</Card>

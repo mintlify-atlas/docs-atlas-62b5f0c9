@@ -1,0 +1,551 @@
+---
+title: 'Best Practices and Patterns'
+description: 'Learn best practices for organizing modules, services, and application architecture'
+---
+
+# Best Practices and Patterns
+
+Follow these patterns and best practices to build maintainable, scalable Nest Dart applications.
+
+## Module Organization
+
+### Feature-Based Module Structure
+
+Organize modules by feature, not by layer:
+
+```dart
+// Good: Feature-based organization
+lib/
+├── modules/
+│   ├── user/
+│   │   ├── user_module.dart
+│   │   ├── user_service.dart
+│   │   ├── user_repository.dart
+│   │   └── models/
+│   │       └── user.dart
+│   ├── auth/
+│   │   ├── auth_module.dart
+│   │   ├── auth_service.dart
+│   │   └── guards/
+│   │       └── jwt_guard.dart
+│   └── todo/
+│       ├── todo_module.dart
+│       ├── todo_service.dart
+│       └── todo_provider.dart
+├── shared/
+│   ├── core_module.dart
+│   └── database_module.dart
+└── app_module.dart
+
+// Avoid: Layer-based organization
+lib/
+├── services/
+│   ├── user_service.dart
+│   ├── auth_service.dart
+│   └── todo_service.dart
+├── repositories/
+│   └── user_repository.dart
+└── modules/
+    └── app_module.dart
+```
+
+### Module Responsibility
+
+Each module should have a single, well-defined responsibility:
+
+```dart
+// Good: Focused modules
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<UserRepository>(
+      UserRepository(locator.get<Database>()),
+    );
+    locator.registerSingleton<UserService>(
+      UserService(locator.get<UserRepository>()),
+    );
+  }
+
+  @override
+  List<Type> get exports => [UserService];
+}
+
+// Avoid: "God modules" that do everything
+class EverythingModule extends Module {
+  // Too many responsibilities!
+  // Handles users, auth, todos, emails, etc.
+}
+```
+
+## When to Export Services
+
+### Export Public APIs Only
+
+Only export services that other modules need to consume:
+
+```dart
+class UserModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Private: Only used within this module
+    locator.registerSingleton<UserRepository>(
+      UserRepository(locator.get<Database>()),
+    );
+    locator.registerSingleton<UserValidator>(
+      UserValidator(),
+    );
+    
+    // Public: Used by other modules
+    locator.registerSingleton<UserService>(
+      UserService(
+        locator.get<UserRepository>(),
+        locator.get<UserValidator>(),
+      ),
+    );
+  }
+
+  @override
+  List<Type> get exports => [
+    UserService, // Only export the public API
+    // UserRepository and UserValidator remain private
+  ];
+}
+```
+
+<Note>
+Exporting creates a public API contract. Only export what's necessary to keep implementation details hidden.
+</Note>
+
+### Re-Exporting Dependencies
+
+Use re-exports to simplify imports for consuming modules:
+
+```dart
+class CoreModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    final prefs = await SharedPreferences.getInstance();
+    locator.registerSingleton<SharedPreferences>(prefs);
+    locator.registerSingleton<Client>(Client());
+    locator.registerSingleton<ConfigService>(
+      ConfigService(prefs),
+    );
+  }
+
+  @override
+  List<Type> get exports => [
+    Client,         // Re-export for HTTP calls
+    ConfigService,  // Re-export for configuration
+    // SharedPreferences is private - use ConfigService instead
+  ];
+}
+```
+
+## Service Scope Decisions
+
+### Singleton vs Factory
+
+From `packages/nest_core/lib/src/module.dart:241-305`:
+
+```dart
+// Singleton: One instance shared across the application
+locator.registerSingleton<DatabaseService>(
+  DatabaseService(),
+);
+
+// Lazy Singleton: Created on first access
+locator.registerLazySingleton<ConfigService>(
+  () => ConfigService(),
+);
+
+// Factory: New instance on every access
+locator.registerFactory<RequestLogger>(
+  () => RequestLogger(),
+);
+```
+
+### When to Use Each Scope
+
+```dart
+class AppModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Singleton: Shared state, expensive to create
+    locator.registerSingleton<DatabaseService>(
+      DatabaseService(),
+    );
+    
+    // Lazy Singleton: Rarely used, expensive to create
+    locator.registerLazySingleton<EmailService>(
+      () => EmailService(config: locator.get<Config>()),
+    );
+    
+    // Factory: Stateful, should not be shared
+    locator.registerFactory<UserSessionService>(
+      () => UserSessionService(),
+    );
+    
+    // Factory: Cheap to create, need fresh instance
+    locator.registerFactory<DateTimeProvider>(
+      () => DateTimeProvider(),
+    );
+  }
+}
+```
+
+<Tip>
+Use singletons for stateless services and factories for stateful services or when you need a fresh instance.
+</Tip>
+
+## Error Handling
+
+### Custom Exceptions
+
+Create domain-specific exceptions for better error handling:
+
+```dart
+class UserNotFoundException implements Exception {
+  final int userId;
+  UserNotFoundException(this.userId);
+  
+  @override
+  String toString() => 'User with id $userId not found';
+}
+
+class ValidationException implements Exception {
+  final Map<String, List<String>> errors;
+  ValidationException(this.errors);
+  
+  @override
+  String toString() => 'Validation failed: $errors';
+}
+
+class UserService {
+  Future<User> getUser(int id) async {
+    final user = await repository.findById(id);
+    if (user == null) {
+      throw UserNotFoundException(id);
+    }
+    return user;
+  }
+  
+  Future<User> createUser(CreateUserDto dto) async {
+    final errors = validator.validate(dto);
+    if (errors.isNotEmpty) {
+      throw ValidationException(errors);
+    }
+    return await repository.create(dto);
+  }
+}
+```
+
+### Error Handling in Services
+
+```dart
+class UserService {
+  final UserRepository _repository;
+  final Logger _logger;
+
+  UserService(this._repository, this._logger);
+
+  Future<User> getUser(int id) async {
+    try {
+      final user = await _repository.findById(id);
+      if (user == null) {
+        throw UserNotFoundException(id);
+      }
+      return user;
+    } catch (e, stackTrace) {
+      _logger.error('Failed to get user $id', e, stackTrace);
+      rethrow;
+    }
+  }
+}
+```
+
+### Module-Level Error Handling
+
+Use `onModuleInit` to handle initialization errors:
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    try {
+      final database = locator.get<DatabaseService>();
+      await database.connect();
+      await database.runMigrations();
+    } catch (e) {
+      print('Failed to initialize database: $e');
+      // Decide: rethrow to prevent app startup, or handle gracefully
+      rethrow;
+    }
+  }
+}
+```
+
+## Performance Considerations
+
+### Lazy Initialization
+
+Use lazy singletons for services that aren't always needed:
+
+```dart
+class AppModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Eager: Created during module initialization
+    locator.registerSingleton<CriticalService>(
+      CriticalService(),
+    );
+    
+    // Lazy: Created only when first accessed
+    locator.registerLazySingleton<EmailService>(
+      () => EmailService(),
+    );
+    locator.registerLazySingleton<ReportGenerator>(
+      () => ReportGenerator(),
+    );
+  }
+}
+```
+
+### Async Service Registration
+
+Handle async initialization properly:
+
+```dart
+class CoreModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Services that require async initialization
+    final prefs = await SharedPreferences.getInstance();
+    locator.registerSingleton<SharedPreferences>(prefs);
+    
+    final database = await openDatabase('app.db');
+    locator.registerSingleton<Database>(database);
+    
+    // Services that depend on async services
+    locator.registerSingleton<ConfigService>(
+      ConfigService(prefs),
+    );
+  }
+}
+```
+
+### Module Import Order
+
+Import order affects initialization performance:
+
+```dart
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    CoreModule(),      // Initialize first (no dependencies)
+    DatabaseModule(),  // Then database (depends on Core)
+    UserModule(),      // Then features (depend on Database)
+    AuthModule(),      // Features can be parallel
+    TodoModule(),
+  ];
+}
+```
+
+From `packages/nest_core/lib/src/container.dart:63-104`, modules initialize in dependency-first order:
+
+```dart
+Future<void> _initializeModuleRecursive(
+  Module module,
+  Set<Type> visited,
+) async {
+  // Initialize all imported modules first (dependency-first order)
+  for (final importedModule in module.imports) {
+    await _initializeModuleRecursive(importedModule, visited);
+  }
+  
+  // Then initialize this module
+  await module.onModuleInit(scopedLocator, _context);
+}
+```
+
+## Lifecycle Management
+
+### Proper Initialization
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<DatabaseService>(
+      () => DatabaseService(),
+    );
+  }
+
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final db = locator.get<DatabaseService>();
+    await db.connect();
+    await db.runMigrations();
+    print('Database initialized successfully');
+  }
+
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    final db = locator.get<DatabaseService>();
+    await db.close();
+    print('Database connection closed');
+  }
+}
+```
+
+### Resource Cleanup
+
+```dart
+class CacheModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<CacheService>(
+      () => CacheService(),
+      dispose: (cache) async {
+        await cache.clear();
+        print('Cache cleared on disposal');
+      },
+    );
+  }
+
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    // Additional cleanup beyond dispose
+    final cache = locator.get<CacheService>();
+    await cache.saveToDisk();
+  }
+}
+```
+
+## Dependency Injection Patterns
+
+### Constructor Injection
+
+```dart
+// Good: Clear dependencies in constructor
+class UserService {
+  final UserRepository _repository;
+  final EmailService _emailService;
+  final Logger _logger;
+
+  UserService(
+    this._repository,
+    this._emailService,
+    this._logger,
+  );
+
+  Future<User> createUser(String email, String name) async {
+    final user = await _repository.create(email, name);
+    await _emailService.sendWelcomeEmail(user);
+    _logger.info('User created: ${user.id}');
+    return user;
+  }
+}
+
+// Module registration
+class UserModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<UserService>(
+      UserService(
+        locator.get<UserRepository>(),
+        locator.get<EmailService>(),
+        locator.get<Logger>(),
+      ),
+    );
+  }
+}
+```
+
+### Service Locator Pattern (Use Sparingly)
+
+```dart
+// Acceptable for complex initialization
+class ComplexService {
+  late final Repository repository;
+  late final Cache cache;
+  late final Logger logger;
+
+  Future<void> initialize(Locator locator) async {
+    repository = locator.get<Repository>();
+    cache = locator.get<Cache>();
+    logger = locator.get<Logger>();
+    
+    await cache.load();
+  }
+}
+
+class ComplexModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    final service = ComplexService();
+    await service.initialize(locator);
+    locator.registerSingleton<ComplexService>(service);
+  }
+}
+```
+
+<Warning>
+Prefer constructor injection over service locator pattern for better testability and explicit dependencies.
+</Warning>
+
+## Testing Best Practices
+
+### Test Module Pattern
+
+```dart
+class TestUserModule extends Module {
+  final UserRepository mockRepository;
+
+  TestUserModule(this.mockRepository);
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<UserRepository>(mockRepository);
+    locator.registerFactory<UserService>(
+      () => UserService(locator.get<UserRepository>()),
+    );
+  }
+
+  @override
+  List<Type> get exports => [UserService];
+}
+
+// In tests
+void main() {
+  test('user service test', () async {
+    final mockRepo = MockUserRepository();
+    final container = ApplicationContainer();
+    await container.registerModule(TestUserModule(mockRepo));
+    
+    // Test with mocked repository
+    final userService = container.get<UserService>();
+    // ...
+    
+    await container.reset();
+  });
+}
+```
+
+## Summary
+
+<Accordion title="Key Takeaways">
+  - **Module Organization**: Feature-based, single responsibility
+  - **Exports**: Only export public APIs, hide implementation details
+  - **Scoping**: Use singletons for stateless, factories for stateful
+  - **Error Handling**: Domain-specific exceptions, proper logging
+  - **Performance**: Lazy initialization, async service registration
+  - **Lifecycle**: Use hooks for initialization and cleanup
+  - **Testing**: Create test modules, always reset container
+</Accordion>
+
+<Tip>
+Follow these patterns consistently across your codebase for maximum maintainability and team productivity.
+</Tip>

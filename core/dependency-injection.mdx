@@ -1,0 +1,411 @@
+---
+title: 'Dependency Injection'
+description: 'Type-safe dependency injection with module-based access control'
+---
+
+## Overview
+
+Nest Dart uses a powerful dependency injection (DI) system built on top of [GetIt](https://pub.dev/packages/get_it), enhanced with module-based access control. The DI system provides type-safe service resolution while enforcing export restrictions to maintain proper encapsulation.
+
+<Note>
+  Unlike plain GetIt, Nest Dart's DI system enforces module boundaries. Services can only be accessed if they are properly exported by the providing module and imported by the consuming module.
+</Note>
+
+## The Locator Interface
+
+The `Locator` interface is the primary way to interact with the DI container:
+
+```dart
+abstract class Locator {
+  /// Get a service instance
+  T get<T extends Object>({
+    String? instanceName,
+    dynamic param1,
+    dynamic param2,
+  });
+
+  /// Get a service instance asynchronously
+  Future<T> getAsync<T extends Object>({
+    String? instanceName,
+    dynamic param1,
+    dynamic param2,
+  });
+
+  /// Call method for syntactic sugar (same as get)
+  T call<T extends Object>({
+    String? instanceName,
+    dynamic param1,
+    dynamic param2,
+  });
+
+  /// Check if a service is registered
+  bool isRegistered<T extends Object>({Object? instance, String? instanceName});
+}
+```
+
+## Registering Services
+
+Services are registered within a module's `providers` method using the `Locator` interface:
+
+### Basic Registration
+
+```dart
+class AppModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register a singleton
+    locator.registerSingleton<ApiClient>(
+      ApiClient(baseUrl: 'https://api.example.com'),
+    );
+    
+    // Register a lazy singleton
+    locator.registerLazySingleton<DatabaseService>(
+      () => DatabaseService(),
+    );
+    
+    // Register a factory
+    locator.registerFactory<RequestLogger>(
+      () => RequestLogger(),
+    );
+  }
+}
+```
+
+### With Dependencies
+
+```dart
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    // Inject dependencies using locator.get() or locator()
+    locator.registerLazySingleton<UserRepository>(
+      () => UserRepository(
+        database: locator<DatabaseService>(),
+      ),
+    );
+    
+    locator.registerLazySingleton<UserService>(
+      () => UserService(
+        repository: locator<UserRepository>(),
+        logger: locator<LoggerService>(),
+      ),
+    );
+  }
+}
+```
+
+## Retrieving Services
+
+### From the Application Container
+
+After modules are registered, retrieve services from the `ApplicationContainer`:
+
+```dart
+final container = ApplicationContainer();
+await container.registerModule(AppModule());
+
+// Get a service
+final userService = container.get<UserService>();
+
+// With parameters (for factory-registered services)
+final logger = container.getWithParams<Logger>('UserModule');
+
+// Async services
+final config = await container.getAsync<ConfigService>();
+
+// Check if registered
+if (container.isRegistered<AuthService>()) {
+  final auth = container.get<AuthService>();
+}
+```
+
+### Within a Module
+
+Use the `Locator` interface within lifecycle hooks:
+
+```dart
+class AppModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    // Access services during initialization
+    final db = locator<DatabaseService>();
+    await db.connect();
+    
+    final config = locator<ConfigService>();
+    print('App initialized with config: ${config.environment}');
+  }
+}
+```
+
+## Access Control and Scoping
+
+Nest Dart enforces module boundaries through scoped containers:
+
+### Scoped GetIt Implementation
+
+From `module.dart:186-215`:
+
+```dart
+class _ScopedGetIt implements Locator {
+  final GetIt _delegate;
+  final ModuleContext _context;
+  final Type _moduleType;
+
+  @override
+  T get<T extends Object>({
+    String? instanceName,
+    dynamic param1,
+    dynamic param2,
+  }) {
+    // Verify this module has permission to access the requested service
+    if (!_context.canAccess(_moduleType, T)) {
+      final providerModule = _context.serviceToModule[T];
+      throw ServiceNotExportedException(
+        T,
+        providerModule ?? Object,
+        _moduleType,
+      );
+    }
+
+    return _delegate.get<T>(
+      instanceName: instanceName,
+      param1: param1,
+      param2: param2,
+    );
+  }
+}
+```
+
+### Access Rules
+
+A module can access a service if:
+
+1. **Global Service**: The service is marked as global (from root module)
+2. **Own Service**: The module itself provides the service
+3. **Imported and Exported**: The module imports another module that exports the service
+
+From `module.dart:49-75`:
+
+```dart
+bool canAccess(Type requestingModule, Type serviceType) {
+  // Global services are always accessible
+  if (_globalServices.contains(serviceType)) {
+    return true;
+  }
+
+  // Find the module that provides this service
+  final providerModule = _serviceToModule[serviceType];
+  if (providerModule == null) {
+    return false;
+  }
+
+  // If the requesting module is the same as the provider, allow access
+  if (requestingModule == providerModule) {
+    return true;
+  }
+
+  // Check if the requesting module imports the provider module
+  final imports = _moduleImports[requestingModule] ?? <Type>{};
+  if (!imports.contains(providerModule)) {
+    return false;
+  }
+
+  // Check if the provider module exports this service
+  final exports = _moduleExports[providerModule] ?? <Type>{};
+  return exports.contains(serviceType);
+}
+```
+
+## Named Instances
+
+Register multiple instances of the same type with different names:
+
+```dart
+class ConfigModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<ApiClient>(
+      ApiClient(baseUrl: 'https://api.example.com'),
+      instanceName: 'production',
+    );
+    
+    locator.registerSingleton<ApiClient>(
+      ApiClient(baseUrl: 'https://staging.example.com'),
+      instanceName: 'staging',
+    );
+  }
+}
+
+// Retrieve named instances
+final prodApi = container.get<ApiClient>(instanceName: 'production');
+final stagingApi = container.get<ApiClient>(instanceName: 'staging');
+```
+
+## Parameterized Factories
+
+Create services that require runtime parameters:
+
+```dart
+class LoggerModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerFactory<Logger>(
+      () => Logger(
+        category: locator<String>(instanceName: 'category'),
+      ),
+    );
+  }
+}
+
+// Get with parameters
+final logger = container.getWithParams<Logger>('UserService');
+```
+
+## Async Service Resolution
+
+For services that require asynchronous initialization:
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Initialize async service during module setup
+    final prefs = await SharedPreferences.getInstance();
+    locator.registerSingleton<SharedPreferences>(prefs);
+  }
+}
+
+// Or use getAsync for lazy async services
+final database = await container.getAsync<DatabaseConnection>();
+```
+
+<Tip>
+  Use the `providers` method's async capability to initialize services that require async setup, like `SharedPreferences`, database connections, or API clients.
+</Tip>
+
+## Service Not Exported Exception
+
+When attempting to access a service that isn't properly exported:
+
+```dart
+class ServiceNotExportedException implements Exception {
+  final Type serviceType;
+  final Type fromModule;
+  final Type toModule;
+
+  @override
+  String toString() {
+    return 'ServiceNotExportedException: Service $serviceType is not exported '
+           'by module $fromModule and cannot be accessed by module $toModule';
+  }
+}
+```
+
+### Example Error Scenario
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<DatabaseService>(
+      () => DatabaseService(),
+    );
+  }
+  
+  // DatabaseService is NOT exported
+  @override
+  List<Type> get exports => [];
+}
+
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    // This will throw ServiceNotExportedException!
+    locator.registerLazySingleton<UserService>(
+      () => UserService(locator<DatabaseService>()),
+    );
+  }
+}
+```
+
+<Warning>
+  Always ensure that services you want to use from another module are included in that module's `exports` list.
+</Warning>
+
+## Type Safety
+
+The DI system is fully type-safe:
+
+```dart
+// Compile-time type checking
+final userService = container.get<UserService>(); // UserService
+
+// Runtime type verification
+try {
+  final service = container.get<NonExistentService>();
+} catch (e) {
+  // GetIt will throw if service isn't registered
+  print('Service not found: $e');
+}
+```
+
+## Best Practices
+
+<Tip>
+  **Constructor Injection**: Always use constructor injection rather than service locator pattern in your classes.
+</Tip>
+
+```dart
+// Good: Constructor injection
+class UserService {
+  final UserRepository repository;
+  final LoggerService logger;
+  
+  UserService({required this.repository, required this.logger});
+}
+
+// Avoid: Service locator in class
+class UserService {
+  late final repository = locator<UserRepository>();
+  late final logger = locator<LoggerService>();
+}
+```
+
+<Tip>
+  **Interface-based Design**: Register interfaces/abstract classes and inject concrete implementations.
+</Tip>
+
+```dart
+abstract class IUserRepository {
+  Future<User> findById(String id);
+}
+
+class UserRepositoryImpl implements IUserRepository {
+  @override
+  Future<User> findById(String id) async {
+    // Implementation
+  }
+}
+
+// Register
+locator.registerLazySingleton<IUserRepository>(
+  () => UserRepositoryImpl(),
+);
+```
+
+<Tip>
+  **Test-Friendly**: The module system makes it easy to replace implementations for testing.
+</Tip>
+
+## Next Steps
+
+- Explore [Providers](/core/providers) to learn about different registration strategies
+- Understand [Exports](/core/exports) for controlling service visibility
+- Learn about [Modules](/core/modules) to organize your application
+- Implement [Lifecycle Hooks](/core/lifecycle) for service initialization

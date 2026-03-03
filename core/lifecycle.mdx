@@ -1,0 +1,580 @@
+---
+title: 'Lifecycle Hooks'
+description: 'Initialize and cleanup modules with onModuleInit and onModuleDestroy hooks'
+---
+
+## Overview
+
+Lifecycle hooks allow you to execute code at specific points in a module's lifetime. Nest Dart provides two lifecycle hooks: `onModuleInit` for initialization and `onModuleDestroy` for cleanup.
+
+<Note>
+  Lifecycle hooks are executed in dependency order, ensuring that imported modules are initialized before modules that depend on them.
+</Note>
+
+## Lifecycle Hooks
+
+### onModuleInit
+
+Called after module registration and dependency resolution, when all services are available.
+
+```dart
+Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+  // Default implementation does nothing
+  // Override in your modules for custom initialization
+}
+```
+
+<ParamField path="locator" type="Locator">
+  The scoped dependency injection container for accessing registered services.
+</ParamField>
+
+<ParamField path="context" type="ModuleContext">
+  The module context containing information about imports, exports, and service providers.
+</ParamField>
+
+**Use cases:**
+- Database connections and migrations
+- Service warm-up and configuration
+- Data seeding
+- Health checks
+- Eager initialization of services
+
+### onModuleDestroy
+
+Called when the module is being destroyed or the container is reset.
+
+```dart
+Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+  // Default implementation does nothing
+  // Override in your modules for custom cleanup
+}
+```
+
+**Use cases:**
+- Closing database connections
+- Saving state to disk
+- Releasing resources
+- Cleanup operations
+- Graceful shutdown
+
+## Basic Examples
+
+### Database Initialization
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<DatabaseService>(
+      () => DatabaseService(
+        host: 'localhost',
+        port: 5432,
+      ),
+    );
+  }
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    // Connect to database when module initializes
+    final db = locator<DatabaseService>();
+    await db.connect();
+    
+    // Run migrations
+    await db.runMigrations();
+    
+    print('✓ Database connected and migrations applied');
+  }
+  
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    // Close connection when module is destroyed
+    final db = locator<DatabaseService>();
+    await db.disconnect();
+    
+    print('✓ Database connection closed');
+  }
+  
+  @override
+  List<Type> get exports => [DatabaseService];
+}
+```
+
+### Cache Warm-up
+
+```dart
+class CacheModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<CacheService>(
+      () => CacheService(),
+    );
+  }
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final cache = locator<CacheService>();
+    
+    // Pre-populate cache with frequently accessed data
+    await cache.warmUp([
+      'app_config',
+      'feature_flags',
+      'user_preferences',
+    ]);
+    
+    print('✓ Cache warmed up with ${cache.size} entries');
+  }
+  
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    final cache = locator<CacheService>();
+    
+    // Persist cache to disk before shutdown
+    await cache.persist();
+    await cache.clear();
+    
+    print('✓ Cache persisted and cleared');
+  }
+}
+```
+
+## Execution Order
+
+Hooks are executed in dependency order:
+
+### Initialization Order
+
+From `container.dart:63-104`:
+
+```dart
+Future<void> _initializeModuleRecursive(
+  Module module,
+  Set<Type> visited,
+) async {
+  final moduleType = module.runtimeType;
+
+  // Skip if already visited or initialized
+  if (visited.contains(moduleType) || _initializedModules.contains(module)) {
+    return;
+  }
+
+  visited.add(moduleType);
+
+  // Initialize all imported modules first (dependency-first order)
+  for (final importedModule in module.imports) {
+    await _initializeModuleRecursive(importedModule, visited);
+  }
+
+  // Initialize this module
+  if (!_initializedModules.contains(module)) {
+    final startTime = DateTime.now();
+    final scopedLocator = _ScopedGetIt(_getIt, _context, moduleType);
+
+    try {
+      await module.onModuleInit(scopedLocator, _context);
+      _initializedModules.add(module);
+      _logger.log(
+        Level.info,
+        '[NestCore] Module initialized successfully: $moduleType',
+      );
+    } catch (e) {
+      _logger.log(
+        Level.error,
+        '[NestCore] Error initializing module $moduleType: $e',
+      );
+      rethrow;
+    }
+  }
+}
+```
+
+**Example:**
+
+```dart
+class ConfigModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    print('1. ConfigModule initialized');
+  }
+}
+
+class DatabaseModule extends Module {
+  @override
+  List<Module> get imports => [ConfigModule()];
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    print('2. DatabaseModule initialized');
+  }
+}
+
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    print('3. AppModule initialized');
+  }
+}
+
+// Output:
+// 1. ConfigModule initialized
+// 2. DatabaseModule initialized
+// 3. AppModule initialized
+```
+
+### Destruction Order
+
+Modules are destroyed in **reverse order** of initialization:
+
+From `container.dart:260-277`:
+
+```dart
+Future<void> reset() async {
+  // Destroy modules in reverse order of initialization
+  final modulesToDestroy = List<Module>.from(_initializedModules.reversed);
+
+  for (final module in modulesToDestroy) {
+    try {
+      print('Destroying module: ${module.runtimeType}');
+      final scopedLocator = _ScopedGetIt(
+        _getIt,
+        _context,
+        module.runtimeType,
+      );
+      await module.onModuleDestroy(scopedLocator, _context);
+      print('Module destroyed successfully: ${module.runtimeType}');
+    } catch (e) {
+      print('Error destroying module ${module.runtimeType}: $e');
+    }
+  }
+  // ...
+}
+```
+
+<Tip>
+  Reverse destruction order ensures that modules are cleaned up after their dependents, preventing use-after-free scenarios.
+</Tip>
+
+## Advanced Examples
+
+### Multi-Module Coordination
+
+```dart
+class MetricsModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<MetricsService>(
+      () => MetricsService(),
+    );
+  }
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final metrics = locator<MetricsService>();
+    
+    // Record which modules are initialized
+    final availableServices = context.getAvailableServices(
+      runtimeType,
+    );
+    
+    await metrics.record('modules_initialized', {
+      'count': availableServices.length,
+      'services': availableServices.map((s) => s.toString()).toList(),
+    });
+  }
+}
+```
+
+### Health Checks
+
+```dart
+class HealthCheckModule extends Module {
+  @override
+  List<Module> get imports => [
+    DatabaseModule(),
+    CacheModule(),
+    ApiModule(),
+  ];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<HealthCheckService>(
+      () => HealthCheckService(),
+    );
+  }
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final health = locator<HealthCheckService>();
+    
+    // Verify all critical services are healthy
+    final checks = [
+      () => locator<DatabaseService>().ping(),
+      () => locator<CacheService>().ping(),
+      () => locator<ApiClient>().ping(),
+    ];
+    
+    for (final check in checks) {
+      await health.verify(check);
+    }
+    
+    if (!health.isHealthy) {
+      throw Exception('Health check failed: ${health.failures}');
+    }
+    
+    print('✓ All health checks passed');
+  }
+}
+```
+
+### Data Seeding
+
+```dart
+class SeedModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final db = locator<DatabaseService>();
+    
+    // Only seed in development
+    if (Environment.isDevelopment) {
+      final hasData = await db.hasData();
+      
+      if (!hasData) {
+        print('Seeding database with test data...');
+        
+        await db.insert('users', [
+          {'name': 'Alice', 'email': 'alice@example.com'},
+          {'name': 'Bob', 'email': 'bob@example.com'},
+        ]);
+        
+        await db.insert('products', [
+          {'name': 'Widget', 'price': 9.99},
+          {'name': 'Gadget', 'price': 19.99},
+        ]);
+        
+        print('✓ Database seeded with test data');
+      }
+    }
+  }
+}
+```
+
+### Graceful Shutdown
+
+```dart
+class ServerModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<HttpServer>(
+      await HttpServer.bind('localhost', 8080),
+    );
+  }
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final server = locator<HttpServer>();
+    print('✓ Server listening on ${server.address}:${server.port}');
+  }
+  
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    final server = locator<HttpServer>();
+    
+    print('Initiating graceful shutdown...');
+    
+    // Wait for pending requests to complete (with timeout)
+    await server.close().timeout(
+      Duration(seconds: 30),
+      onTimeout: () {
+        print('Shutdown timeout - forcing close');
+      },
+    );
+    
+    print('✓ Server shutdown complete');
+  }
+}
+```
+
+## Error Handling
+
+### Initialization Errors
+
+From `container.dart:88-102`:
+
+```dart
+try {
+  await module.onModuleInit(scopedLocator, _context);
+  _initializedModules.add(module);
+  _logger.log(
+    Level.info,
+    '[NestCore] Module initialized successfully: $moduleType',
+  );
+} catch (e) {
+  _logger.log(
+    Level.error,
+    '[NestCore] Error initializing module $moduleType: $e',
+  );
+  rethrow;
+}
+```
+
+<Warning>
+  If `onModuleInit` throws an error, the entire initialization process fails. Ensure proper error handling in your hooks.
+</Warning>
+
+### Destruction Errors
+
+```dart
+for (final module in modulesToDestroy) {
+  try {
+    await module.onModuleDestroy(scopedLocator, _context);
+  } catch (e) {
+    print('Error destroying module ${module.runtimeType}: $e');
+    // Continue destroying other modules
+  }
+}
+```
+
+<Note>
+  Errors in `onModuleDestroy` are logged but don't stop the destruction of other modules.
+</Note>
+
+## Using Module Context
+
+Access module information during lifecycle hooks:
+
+```dart
+class AnalyticsModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    // Get all services available to this module
+    final available = context.getAvailableServices(runtimeType);
+    print('Available services: ${available.length}');
+    
+    // Check what this module exports
+    final ourExports = context.moduleExports[runtimeType] ?? {};
+    print('Exporting: $ourExports');
+    
+    // Check our imports
+    final ourImports = context.moduleImports[runtimeType] ?? {};
+    print('Importing from: $ourImports');
+    
+    // Check global services
+    print('Global services: ${context.globalServices}');
+  }
+}
+```
+
+## Best Practices
+
+<Tip>
+  **Keep Hooks Fast**: Lifecycle hooks block module initialization. Perform only essential setup and defer heavy operations when possible.
+</Tip>
+
+<Tip>
+  **Idempotent Initialization**: Make `onModuleInit` idempotent in case it's called multiple times (though the framework prevents this).
+</Tip>
+
+<Tip>
+  **Cleanup Resources**: Always implement `onModuleDestroy` for modules that acquire resources (connections, files, timers).
+</Tip>
+
+<Warning>
+  Don't access services from modules that haven't been initialized yet. The framework ensures dependency order, but be mindful of your import graph.
+</Warning>
+
+## Lifecycle with Testing
+
+```dart
+test('module lifecycle', () async {
+  final container = ApplicationContainer();
+  
+  // Track initialization
+  var initialized = false;
+  var destroyed = false;
+  
+  final module = TestModule(
+    onInit: () => initialized = true,
+    onDestroy: () => destroyed = true,
+  );
+  
+  // Initialize
+  await container.registerModule(module);
+  expect(initialized, isTrue);
+  
+  // Cleanup
+  await container.reset();
+  expect(destroyed, isTrue);
+});
+```
+
+## Complete Example
+
+```dart
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    ConfigModule(),
+    DatabaseModule(),
+    CacheModule(),
+  ];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<AppService>(
+      () => AppService(
+        config: locator<ConfigService>(),
+        db: locator<DatabaseService>(),
+        cache: locator<CacheService>(),
+      ),
+    );
+  }
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    print('🚀 Application starting...');
+    
+    final config = locator<ConfigService>();
+    print('Environment: ${config.environment}');
+    
+    final db = locator<DatabaseService>();
+    await db.connect();
+    print('✓ Database connected');
+    
+    final cache = locator<CacheService>();
+    await cache.warmUp();
+    print('✓ Cache initialized');
+    
+    final app = locator<AppService>();
+    await app.initialize();
+    print('✓ Application ready');
+  }
+  
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    print('🛑 Application shutting down...');
+    
+    try {
+      final app = locator<AppService>();
+      await app.shutdown();
+      print('✓ Application shutdown complete');
+    } catch (e) {
+      print('Error during shutdown: $e');
+    }
+  }
+  
+  @override
+  List<Type> get exports => [AppService];
+}
+```
+
+## Next Steps
+
+- Learn about [Modules](/core/modules) to understand module organization
+- Explore [Dependency Injection](/core/dependency-injection) for service resolution
+- Understand [Providers](/core/providers) for different registration strategies
+- Review [Exports](/core/exports) for access control

@@ -1,0 +1,314 @@
+---
+title: 'Module'
+description: 'Abstract base class for creating modular dependency injection containers with controlled service access'
+---
+
+## Overview
+
+The `Module` class is the foundation of the Nest Dart modular architecture. It provides a structured way to organize your application's dependencies, control service visibility, and manage initialization/cleanup lifecycle hooks.
+
+**Key Features:**
+- Modular dependency injection with import/export system
+- Service encapsulation and access control
+- Async initialization support
+- Lifecycle hooks for setup and teardown
+- Prevents circular dependencies
+
+## Class Definition
+
+```dart
+abstract class Module
+```
+
+## Properties
+
+### imports
+
+```dart
+List<Module> get imports => []
+```
+
+List of modules that this module depends on. Services from imported modules are only accessible if they are exported by those modules.
+
+<ParamField path="imports" type="List<Module>" default="[]">
+  Modules that this module imports. Override this getter to specify dependencies.
+</ParamField>
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule(), AuthModule()];
+}
+```
+
+### exports
+
+```dart
+List<Type> get exports => []
+```
+
+List of provider types that this module exports to other modules. Only exported services can be accessed by modules that import this module.
+
+<ParamField path="exports" type="List<Type>" default="[]">
+  Service types to make available to importing modules.
+</ParamField>
+
+<Warning>
+Only services listed in `exports` can be accessed by other modules. Keep this list minimal to maintain proper encapsulation.
+</Warning>
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  List<Type> get exports => [UserService, UserRepository];
+}
+```
+
+## Methods
+
+### providers
+
+```dart
+Future<void> providers(Locator locator) async {}
+```
+
+Configure providers/services for dependency injection. This method should register all services this module provides. Can be async to support services that require async initialization.
+
+<ParamField path="locator" type="Locator" required>
+  The scoped dependency injection container for registering services.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+<Note>
+The `locator` parameter is scoped to this module and enforces access restrictions. You can only access services from imported modules that are exported.
+</Note>
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register a singleton
+    locator.registerSingleton<UserService>(
+      UserService(locator.get<UserRepository>())
+    );
+    
+    // Register a lazy singleton that depends on async initialization
+    final prefs = await SharedPreferences.getInstance();
+    locator.registerSingleton<SharedPreferences>(prefs);
+    
+    // Register a factory
+    locator.registerFactory<UserFactory>(
+      () => UserFactory(locator.get<UserService>())
+    );
+  }
+}
+```
+
+### onModuleInit
+
+```dart
+Future<void> onModuleInit(Locator locator, ModuleContext context) async {}
+```
+
+Called after module registration and dependency resolution. Use this for initialization logic that requires access to fully registered services.
+
+<ParamField path="locator" type="Locator" required>
+  Scoped locator for accessing registered services within this module.
+</ParamField>
+
+<ParamField path="context" type="ModuleContext" required>
+  The module context containing export/import metadata.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+**Common Use Cases:**
+- Database connections and migrations
+- Service warm-up and configuration
+- Data seeding
+- Health checks
+- Running startup tasks
+
+**Example:**
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final db = locator.get<Database>();
+    await db.connect();
+    await db.runMigrations();
+    print('Database initialized and migrations completed');
+  }
+}
+```
+
+### onModuleDestroy
+
+```dart
+Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {}
+```
+
+Called when the module is being destroyed/reset. Use this for cleanup logic to properly release resources.
+
+<ParamField path="locator" type="Locator" required>
+  Scoped locator for accessing registered services within this module.
+</ParamField>
+
+<ParamField path="context" type="ModuleContext" required>
+  The module context containing export/import metadata.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+**Common Use Cases:**
+- Closing database connections
+- Saving state
+- Releasing resources
+- Cleanup operations
+- Flushing caches
+
+**Example:**
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    final db = locator.get<Database>();
+    await db.close();
+    print('Database connection closed');
+  }
+}
+```
+
+### register
+
+```dart
+Future<void> register(GetIt getIt, ModuleContext context) async
+```
+
+Public method to register this module with the dependency injection container. This is typically called by `ApplicationContainer` and should not be called directly.
+
+<ParamField path="getIt" type="GetIt" required>
+  The GetIt instance to register services with.
+</ParamField>
+
+<ParamField path="context" type="ModuleContext" required>
+  The module context for tracking dependencies.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+<Warning>
+This method is internal to the framework. Use `ApplicationContainer.registerModule()` instead of calling this directly.
+</Warning>
+
+## Complete Example
+
+```dart
+import 'package:nest_core/core.dart';
+
+// Define services
+class UserRepository {
+  Future<User> findById(String id) async {
+    // Implementation
+  }
+}
+
+class UserService {
+  final UserRepository repository;
+  UserService(this.repository);
+  
+  Future<User> getUser(String id) => repository.findById(id);
+}
+
+// Create a module
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  List<Type> get exports => [UserService];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register internal repository (not exported)
+    locator.registerLazySingleton<UserRepository>(
+      () => UserRepository(),
+    );
+    
+    // Register service (exported)
+    locator.registerLazySingleton<UserService>(
+      () => UserService(locator.get<UserRepository>()),
+    );
+  }
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final userService = locator.get<UserService>();
+    print('UserModule initialized');
+  }
+  
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    print('UserModule cleanup complete');
+  }
+}
+
+// Use the module
+void main() async {
+  final container = ApplicationContainer();
+  await container.registerModule(UserModule());
+  
+  // Access exported service
+  final userService = container.get<UserService>();
+  final user = await userService.getUser('123');
+}
+```
+
+## Exceptions
+
+### ServiceNotExportedException
+
+Thrown when trying to access a service that is not exported by the module that provides it.
+
+```dart
+class ServiceNotExportedException implements Exception {
+  final Type serviceType;
+  final Type fromModule;
+  final Type toModule;
+}
+```
+
+**Example:**
+
+```dart
+// DatabaseModule doesn't export DatabaseConnection
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    // This will throw ServiceNotExportedException if
+    // DatabaseConnection is not in DatabaseModule.exports
+    final db = locator.get<DatabaseConnection>();
+  }
+}
+```
+
+## Best Practices
+
+1. **Keep exports minimal**: Only export services that other modules need to access
+2. **Use lazy singletons**: Prefer `registerLazySingleton` over `registerSingleton` for better performance
+3. **Organize by feature**: Create modules around feature boundaries (e.g., UserModule, AuthModule)
+4. **Initialize in onModuleInit**: Place async initialization logic in `onModuleInit` rather than `providers`
+5. **Clean up resources**: Always implement `onModuleDestroy` if your module allocates resources
+6. **Avoid circular dependencies**: Structure your module imports to prevent circular references

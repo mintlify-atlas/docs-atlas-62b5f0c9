@@ -1,0 +1,200 @@
+---
+title: "ModularApp"
+description: "Root widget that initializes the Nest module system in Flutter applications"
+---
+
+## Overview
+
+`ModularApp` is the root widget that initializes the dependency injection container and module system. It must wrap your application's root widget to enable the use of `Modular` static methods and dependency injection throughout your widget tree.
+
+## Constructor
+
+```dart
+const ModularApp({
+  Key? key,
+  required Module module,
+  required Widget child,
+  ApplicationContainer? container,
+  Widget? loading,
+})
+```
+
+## Properties
+
+<ParamField path="module" type="Module" required>
+  The root module of your application. This module and all its imports will be registered in the dependency injection container.
+  
+  ```dart
+  ModularApp(
+    module: AppModule(),
+    child: MyApp(),
+  )
+  ```
+</ParamField>
+
+<ParamField path="child" type="Widget" required>
+  The root widget of your application, typically a `MaterialApp` or `CupertinoApp`.
+  
+  ```dart
+  ModularApp(
+    module: AppModule(),
+    child: MaterialApp.router(
+      routerConfig: Modular.router((router) => router),
+    ),
+  )
+  ```
+</ParamField>
+
+<ParamField path="container" type="ApplicationContainer">
+  Optional custom container instance. If not provided, a new container will be created automatically.
+  
+  <Note>
+    This is useful for testing or when you need to provide a pre-configured container.
+  </Note>
+</ParamField>
+
+<ParamField path="loading" type="Widget">
+  Custom loading widget to display during container initialization. If not provided, a default loading screen with `CircularProgressIndicator` will be shown.
+  
+  ```dart
+  ModularApp(
+    module: AppModule(),
+    loading: Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Initializing app...'),
+          ],
+        ),
+      ),
+    ),
+    child: MyApp(),
+  )
+  ```
+</ParamField>
+
+## Initialization Flow
+
+The `ModularApp` widget follows this initialization sequence:
+
+1. **Create Container**: Creates or uses the provided `ApplicationContainer`
+2. **Store Root Module**: Saves the root module reference for router configuration
+3. **Register Module**: Asynchronously registers the module and all its dependencies
+4. **Create Notifier**: Wraps the container in an `ApplicationContainerNotifier`
+5. **Set Global Container**: Makes the container available via `Modular` static methods
+6. **Provide to Tree**: Provides the container to the widget tree via `InheritedWidget`
+
+<Warning>
+  During initialization, the loading widget is displayed. All module registration happens asynchronously to prevent blocking the UI thread.
+</Warning>
+
+## Usage Example
+
+### Basic Setup
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:nest_flutter/nest_flutter.dart';
+
+void main() {
+  runApp(
+    ModularApp(
+      module: AppModule(),
+      child: MyApp(),
+    ),
+  );
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp.router(
+      title: 'My App',
+      routerConfig: Modular.router((router) => router),
+    );
+  }
+}
+```
+
+### With Custom Loading Screen
+
+```dart
+void main() {
+  runApp(
+    ModularApp(
+      module: AppModule(),
+      loading: MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(
+                  color: Colors.blue,
+                ),
+                SizedBox(height: 24),
+                Text(
+                  'Loading Application...',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      child: MyApp(),
+    ),
+  );
+}
+```
+
+### With Custom Container (Testing)
+
+```dart
+void main() {
+  final testContainer = ApplicationContainer();
+  
+  runApp(
+    ModularApp(
+      module: AppModule(),
+      container: testContainer,
+      child: MyApp(),
+    ),
+  );
+}
+```
+
+## Lifecycle Management
+
+The `ModularApp` widget manages the container lifecycle automatically:
+
+- **initState**: Initializes the container and registers modules
+- **didChangeDependencies**: Re-establishes global container reference
+- **dispose**: Clears global container and disposes notifier
+
+<Note>
+  The global container is automatically cleared when `ModularApp` is disposed, preventing memory leaks.
+</Note>
+
+## Error Handling
+
+<Warning>
+  If you call `Modular.get<T>()` or other static methods before `ModularApp` is initialized, you'll receive a `FlutterError` with a clear message:
+  
+  ```
+  Modular.get<T>() called before ModularApp was initialized.
+  Make sure your app is wrapped with ModularApp widget.
+  ```
+</Warning>
+
+## See Also
+
+- [Modular Class](/api/flutter/modular) - Static methods for dependency injection
+- [Module Class](/api/flutter/module) - Creating modules with routes
+- [Routing](/api/flutter/routing) - Route collection and GoRouter integration

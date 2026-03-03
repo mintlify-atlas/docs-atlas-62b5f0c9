@@ -1,0 +1,462 @@
+---
+title: 'Exports'
+description: 'Control service visibility and enforce module boundaries with the export system'
+---
+
+## Overview
+
+The export system in Nest Dart provides fine-grained control over which services are accessible outside a module. Only exported services can be used by other modules, creating clear boundaries and encapsulation.
+
+<Note>
+  Exports are a key feature that distinguishes Nest Dart from plain GetIt. They enforce proper architectural boundaries and prevent unintended dependencies.
+</Note>
+
+## Export Basics
+
+Modules define exports through the `exports` property:
+
+```dart
+abstract class Module {
+  /// List of provider types that this module exports to other modules
+  List<Type> get exports => [];
+}
+```
+
+### Simple Export Example
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register multiple services
+    locator.registerLazySingleton<DatabaseConnection>(
+      () => DatabaseConnection(),
+    );
+    
+    locator.registerLazySingleton<DatabaseService>(
+      () => DatabaseService(locator<DatabaseConnection>()),
+    );
+    
+    locator.registerLazySingleton<QueryBuilder>(
+      () => QueryBuilder(),
+    );
+  }
+  
+  // Only export DatabaseService - keep others internal
+  @override
+  List<Type> get exports => [DatabaseService];
+}
+```
+
+<Warning>
+  Services not in the `exports` list cannot be accessed by other modules, even if those modules import your module.
+</Warning>
+
+## Import/Export Relationship
+
+For a module to use an exported service, it must import the providing module:
+
+```dart
+class UserModule extends Module {
+  // Import DatabaseModule to access its exports
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<UserRepository>(
+      () => UserRepository(
+        // Can access DatabaseService (it's exported)
+        database: locator<DatabaseService>(),
+        
+        // Cannot access DatabaseConnection (not exported)
+        // connection: locator<DatabaseConnection>(), // ❌ Throws exception!
+      ),
+    );
+  }
+}
+```
+
+## Access Control Rules
+
+From `module.dart:49-75`, the `canAccess` method enforces these rules:
+
+```dart
+bool canAccess(Type requestingModule, Type serviceType) {
+  // Global services are always accessible
+  if (_globalServices.contains(serviceType)) {
+    return true;
+  }
+
+  // Find the module that provides this service
+  final providerModule = _serviceToModule[serviceType];
+  if (providerModule == null) {
+    return false;
+  }
+
+  // If the requesting module is the same as the provider, allow access
+  if (requestingModule == providerModule) {
+    return true;
+  }
+
+  // Check if the requesting module imports the provider module
+  final imports = _moduleImports[requestingModule] ?? <Type>{};
+  if (!imports.contains(providerModule)) {
+    return false;
+  }
+
+  // Check if the provider module exports this service
+  final exports = _moduleExports[providerModule] ?? <Type>{};
+  return exports.contains(serviceType);
+}
+```
+
+A module can access a service if:
+
+1. **It's a global service** (registered by root module)
+2. **It's the service's provider** (same module)
+3. **Import + Export**: The module imports the provider module AND the provider exports the service
+
+## ServiceNotExportedException
+
+When access control is violated, a `ServiceNotExportedException` is thrown:
+
+```dart
+class ServiceNotExportedException implements Exception {
+  final Type serviceType;
+  final Type fromModule;
+  final Type toModule;
+
+  @override
+  String toString() {
+    return 'ServiceNotExportedException: Service $serviceType is not exported '
+           'by module $fromModule and cannot be accessed by module $toModule';
+  }
+}
+```
+
+### Example Error
+
+```dart
+class AuthModule extends Module {
+  @override
+  List<Module> get imports => [CryptoModule()];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    try {
+      // CryptoModule doesn't export PrivateKeyService
+      final keyService = locator<PrivateKeyService>();
+    } catch (e) {
+      // ServiceNotExportedException: Service PrivateKeyService is not exported
+      // by module CryptoModule and cannot be accessed by module AuthModule
+      print(e);
+    }
+  }
+}
+```
+
+## Export Patterns
+
+### Minimal Exports (Recommended)
+
+Only export what's necessary:
+
+```dart
+class PaymentModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Internal implementation details
+    locator.registerLazySingleton<StripeClient>(
+      () => StripeClient(),
+    );
+    locator.registerLazySingleton<PayPalClient>(
+      () => PayPalClient(),
+    );
+    locator.registerLazySingleton<PaymentValidator>(
+      () => PaymentValidator(),
+    );
+    
+    // Public API
+    locator.registerLazySingleton<PaymentService>(
+      () => PaymentService(
+        stripe: locator<StripeClient>(),
+        paypal: locator<PayPalClient>(),
+        validator: locator<PaymentValidator>(),
+      ),
+    );
+  }
+  
+  // Only export the facade
+  @override
+  List<Type> get exports => [PaymentService];
+}
+```
+
+<Tip>
+  Export high-level facades or services while keeping implementation details internal. This provides a clean API and allows internal refactoring without breaking consumers.
+</Tip>
+
+### Multiple Exports
+
+Export multiple related services:
+
+```dart
+class DataModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<UserRepository>(
+      () => UserRepositoryImpl(),
+    );
+    locator.registerLazySingleton<ProductRepository>(
+      () => ProductRepositoryImpl(),
+    );
+    locator.registerLazySingleton<OrderRepository>(
+      () => OrderRepositoryImpl(),
+    );
+  }
+  
+  // Export all repositories
+  @override
+  List<Type> get exports => [
+    UserRepository,
+    ProductRepository,
+    OrderRepository,
+  ];
+}
+```
+
+### Re-exporting from Imported Modules
+
+A module can export services from its imports:
+
+```dart
+class CoreModule extends Module {
+  @override
+  List<Module> get imports => [
+    LoggerModule(),
+    ConfigModule(),
+    CacheModule(),
+  ];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    // CoreModule's own services
+    locator.registerLazySingleton<CoreService>(
+      () => CoreService(),
+    );
+  }
+  
+  // Re-export services from imported modules
+  @override
+  List<Type> get exports => [
+    CoreService,
+    LoggerService,  // from LoggerModule
+    ConfigService,  // from ConfigModule
+    CacheService,   // from CacheModule
+  ];
+}
+```
+
+<Note>
+  Re-exporting is useful for creating shared or core modules that bundle commonly used services.
+</Note>
+
+## Global Services
+
+Services registered by the root module (directly registered with `ApplicationContainer`) are automatically made global:
+
+From `container.dart:106-120`:
+
+```dart
+void _autoExportFromRootModule(Module rootModule) {
+  final visitedModules = <Type>{};
+
+  // Make the root module's own exported services globally available
+  for (final exportType in rootModule.exports) {
+    _context.markAsGlobal(exportType);
+  }
+
+  // Make services from directly imported modules globally available
+  for (final importedModule in rootModule.imports) {
+    _collectDirectExports(importedModule, visitedModules);
+  }
+}
+```
+
+### Example
+
+```dart
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    CoreModule(),
+    DatabaseModule(),
+  ];
+  
+  @override
+  List<Type> get exports => [
+    // These become globally accessible
+    CoreService,
+    LoggerService,
+  ];
+}
+
+// Register with container
+final container = ApplicationContainer();
+await container.registerModule(AppModule());
+
+// Any module can now access CoreService and LoggerService
+// without importing AppModule
+```
+
+## Encapsulation Benefits
+
+### Before Exports (Plain GetIt)
+
+```dart
+// Any service can access any other service
+final getIt = GetIt.instance;
+
+getIt.registerLazySingleton(() => DatabaseConnection());
+getIt.registerLazySingleton(() => InternalCache());
+getIt.registerLazySingleton(() => DebugLogger());
+
+// Anywhere in the app:
+final connection = getIt<DatabaseConnection>(); // Uncontrolled access
+final cache = getIt<InternalCache>();           // No boundaries
+```
+
+### With Exports (Nest Dart)
+
+```dart
+// Clear boundaries and controlled access
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<DatabaseConnection>(
+      () => DatabaseConnection(),
+    );
+    locator.registerLazySingleton<InternalCache>(
+      () => InternalCache(),
+    );
+    locator.registerLazySingleton<DatabaseService>(
+      () => DatabaseService(
+        connection: locator<DatabaseConnection>(),
+        cache: locator<InternalCache>(),
+      ),
+    );
+  }
+  
+  // Only expose the public API
+  @override
+  List<Type> get exports => [DatabaseService];
+}
+
+// Other modules can only access DatabaseService
+// DatabaseConnection and InternalCache are protected
+```
+
+## Debugging Export Issues
+
+Check available services for a module:
+
+```dart
+final container = ApplicationContainer();
+await container.registerModule(AppModule());
+
+// Get all available services
+final available = container.getAvailableServices();
+print('Available services: $available');
+
+// Check specific service
+if (container.isRegistered<UserService>()) {
+  print('UserService is accessible');
+} else {
+  print('UserService is not accessible - check exports');
+}
+```
+
+From `module.dart:77-99`, you can inspect available services:
+
+```dart
+Set<Type> getAvailableServices(Type moduleType) {
+  final available = <Type>{};
+
+  // Add global services
+  available.addAll(_globalServices);
+
+  // Add services from imported modules that are exported
+  final imports = _moduleImports[moduleType] ?? <Type>{};
+  for (final importedModule in imports) {
+    final exports = _moduleExports[importedModule] ?? <Type>{};
+    available.addAll(exports);
+  }
+
+  // Add services from this module itself
+  for (final entry in _serviceToModule.entries) {
+    if (entry.value == moduleType) {
+      available.add(entry.key);
+    }
+  }
+
+  return available;
+}
+```
+
+## Best Practices
+
+<Tip>
+  **Facade Pattern**: Export a single service that provides a clean interface to complex internal implementations.
+</Tip>
+
+<Tip>
+  **Version Your Exports**: When changing exports, consider the impact on consuming modules. Removing an export is a breaking change.
+</Tip>
+
+<Tip>
+  **Document Exports**: Add comments explaining why certain services are or aren't exported.
+</Tip>
+
+```dart
+class ApiModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Internal - handles raw HTTP
+    locator.registerLazySingleton<HttpClient>(
+      () => HttpClient(),
+    );
+    
+    // Internal - manages auth tokens
+    locator.registerLazySingleton<TokenManager>(
+      () => TokenManager(),
+    );
+    
+    // Public API - high-level client
+    locator.registerLazySingleton<ApiClient>(
+      () => ApiClient(
+        http: locator<HttpClient>(),
+        tokens: locator<TokenManager>(),
+      ),
+    );
+  }
+  
+  @override
+  List<Type> get exports => [
+    // Export only the high-level client
+    // HttpClient and TokenManager are implementation details
+    ApiClient,
+  ];
+}
+```
+
+<Warning>
+  Exporting too many services defeats the purpose of encapsulation. Only export what's truly needed by consumers.
+</Warning>
+
+## Next Steps
+
+- Learn about [Modules](/core/modules) to understand module organization
+- Explore [Dependency Injection](/core/dependency-injection) to see how access control is enforced
+- Understand [Providers](/core/providers) for different registration strategies
+- Implement [Lifecycle Hooks](/core/lifecycle) to initialize exported services

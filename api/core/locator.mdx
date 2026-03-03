@@ -1,0 +1,530 @@
+---
+title: 'Locator'
+description: 'Interface for type-safe dependency injection with module-based export restrictions'
+---
+
+## Overview
+
+The `Locator` interface defines the contract for dependency injection containers in Nest Dart. It provides type-safe access to services while enforcing module export restrictions.
+
+**Key Features:**
+- Type-safe service resolution
+- Multiple registration strategies (singleton, factory, lazy singleton)
+- Named instances support
+- Parameter passing to factories
+- Async service support
+- Export-based access control
+
+## Interface Definition
+
+```dart
+abstract class Locator
+```
+
+## Implementations
+
+The `Locator` interface is implemented by:
+- `_ScopedGetIt` (internal) - Used within modules to enforce access restrictions
+- `ApplicationContainer` (partial) - Provides similar methods at the application level
+
+<Note>
+When you use `Locator` in your module's `providers()` method, you receive a scoped implementation that only allows access to services from imported modules that are exported.
+</Note>
+
+## Methods
+
+### get
+
+```dart
+T get<T extends Object>({
+  String? instanceName,
+  dynamic param1,
+  dynamic param2,
+})
+```
+
+Get a service instance from the container.
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Named instance identifier for retrieving specific instances.
+</ParamField>
+
+<ParamField path="param1" type="dynamic" optional>
+  First parameter to pass to factory functions.
+</ParamField>
+
+<ParamField path="param2" type="dynamic" optional>
+  Second parameter to pass to factory functions.
+</ParamField>
+
+**Returns:** `T` - The requested service instance.
+
+**Throws:** `ServiceNotExportedException` if the service is not accessible from the current module.
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Get a dependency from imported module
+    final database = locator.get<Database>();
+    
+    // Register service using the dependency
+    locator.registerSingleton<UserRepository>(
+      UserRepository(database),
+    );
+    
+    // Get a named instance
+    final primaryDb = locator.get<Database>(instanceName: 'primary');
+  }
+}
+```
+
+### getAsync
+
+```dart
+Future<T> getAsync<T extends Object>({
+  String? instanceName,
+  dynamic param1,
+  dynamic param2,
+})
+```
+
+Get a service instance asynchronously. Used for services that require async initialization.
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Named instance identifier.
+</ParamField>
+
+<ParamField path="param1" type="dynamic" optional>
+  First parameter to pass to factory functions.
+</ParamField>
+
+<ParamField path="param2" type="dynamic" optional>
+  Second parameter to pass to factory functions.
+</ParamField>
+
+**Returns:** `Future<T>` - The requested service instance.
+
+**Throws:** `ServiceNotExportedException` if the service is not accessible.
+
+**Example:**
+
+```dart
+class AppModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Get async service
+    final database = await locator.getAsync<Database>();
+    
+    // Use it to register other services
+    locator.registerSingleton<UserService>(
+      UserService(database),
+    );
+  }
+}
+```
+
+### call
+
+```dart
+T call<T extends Object>({
+  String? instanceName,
+  dynamic param1,
+  dynamic param2,
+})
+```
+
+Call method providing syntactic sugar for `get()`. Allows using the locator as a callable object.
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Named instance identifier.
+</ParamField>
+
+<ParamField path="param1" type="dynamic" optional>
+  First parameter to pass to factory functions.
+</ParamField>
+
+<ParamField path="param2" type="dynamic" optional>
+  Second parameter to pass to factory functions.
+</ParamField>
+
+**Returns:** `T` - The requested service instance.
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Using call syntax (syntactic sugar for get)
+    final database = locator<Database>();
+    
+    // Equivalent to:
+    // final database = locator.get<Database>();
+    
+    locator.registerSingleton<UserService>(
+      UserService(database),
+    );
+  }
+}
+```
+
+### registerSingleton
+
+```dart
+void registerSingleton<T extends Object>(
+  T instance, {
+  String? instanceName,
+  bool? signalsReady,
+  DisposingFunc<T>? dispose,
+})
+```
+
+Register a singleton instance that is created immediately and reused for all requests.
+
+<ParamField path="instance" type="T" required>
+  The instance to register.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Optional name for the instance (for multiple instances of the same type).
+</ParamField>
+
+<ParamField path="signalsReady" type="bool" optional>
+  Whether this singleton signals when it's ready.
+</ParamField>
+
+<ParamField path="dispose" type="DisposingFunc<T>" optional>
+  Optional disposal function called when the container is reset.
+</ParamField>
+
+**Returns:** `void`
+
+**Example:**
+
+```dart
+class ConfigModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register a singleton
+    locator.registerSingleton<AppConfig>(
+      AppConfig(apiUrl: 'https://api.example.com'),
+    );
+    
+    // Register with disposal
+    locator.registerSingleton<Database>(
+      Database(),
+      dispose: (db) => db.close(),
+    );
+    
+    // Register named instance
+    locator.registerSingleton<Database>(
+      Database(host: 'primary.db'),
+      instanceName: 'primary',
+    );
+  }
+}
+```
+
+### registerFactory
+
+```dart
+void registerFactory<T extends Object>(
+  FactoryFunc<T> factoryFunc, {
+  String? instanceName,
+})
+```
+
+Register a factory function that creates a new instance on each request.
+
+<ParamField path="factoryFunc" type="FactoryFunc<T>" required>
+  Factory function that creates instances of type T.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Optional name for named instances.
+</ParamField>
+
+**Returns:** `void`
+
+**Type Definition:**
+```dart
+typedef FactoryFunc<T> = T Function();
+```
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register factory - new instance each time
+    locator.registerFactory<UserLogger>(
+      () => UserLogger(DateTime.now()),
+    );
+    
+    // Each get creates a new instance
+    final logger1 = locator.get<UserLogger>();
+    final logger2 = locator.get<UserLogger>();
+    // logger1 != logger2 (different instances)
+  }
+}
+```
+
+### registerLazySingleton
+
+```dart
+void registerLazySingleton<T extends Object>(
+  FactoryFunc<T> factoryFunc, {
+  String? instanceName,
+  DisposingFunc<T>? dispose,
+})
+```
+
+Register a lazy singleton that is created only when first requested and then reused.
+
+<ParamField path="factoryFunc" type="FactoryFunc<T>" required>
+  Factory function that creates the singleton instance.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Optional name for named instances.
+</ParamField>
+
+<ParamField path="dispose" type="DisposingFunc<T>" optional>
+  Optional disposal function.
+</ParamField>
+
+**Returns:** `void`
+
+**Type Definition:**
+```dart
+typedef DisposingFunc<T> = void Function(T);
+```
+
+<Note>
+Lazy singletons are the recommended registration strategy for most services. They provide singleton behavior while deferring instantiation until needed.
+</Note>
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register lazy singleton - created on first access
+    locator.registerLazySingleton<UserService>(
+      () => UserService(locator.get<UserRepository>()),
+    );
+    
+    // Register with disposal
+    locator.registerLazySingleton<DatabaseConnection>(
+      () => DatabaseConnection(),
+      dispose: (conn) => conn.close(),
+    );
+    
+    // Not created yet...
+    // Created here on first access:
+    final service = locator.get<UserService>();
+    // Reused on subsequent access:
+    final sameService = locator.get<UserService>();
+    // service == sameService (same instance)
+  }
+}
+```
+
+### isRegistered
+
+```dart
+bool isRegistered<T extends Object>({
+  Object? instance,
+  String? instanceName,
+})
+```
+
+Check if a service type is registered in the container.
+
+<ParamField path="T" type="Type" required>
+  The type to check for registration.
+</ParamField>
+
+<ParamField path="instance" type="Object" optional>
+  Check if a specific instance is registered.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Check for a named instance.
+</ParamField>
+
+**Returns:** `bool` - `true` if the service is registered.
+
+**Example:**
+
+```dart
+class FeatureModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Conditionally register based on availability
+    if (locator.isRegistered<CacheService>()) {
+      final cache = locator.get<CacheService>();
+      locator.registerSingleton<UserService>(
+        UserService(cache: cache),
+      );
+    } else {
+      locator.registerSingleton<UserService>(
+        UserService(),
+      );
+    }
+  }
+}
+```
+
+### reset
+
+```dart
+Future<void> reset({bool dispose = true})
+```
+
+Reset the container, removing all registered services.
+
+<ParamField path="dispose" type="bool" default="true">
+  Whether to call dispose functions on registered singletons.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+<Warning>
+Calling `reset()` directly on a scoped locator is not recommended. Use `ApplicationContainer.reset()` instead.
+</Warning>
+
+### allReady
+
+```dart
+Future<void> allReady({
+  Duration? timeout,
+  bool ignorePendingAsyncCreation = false,
+})
+```
+
+Wait for all registered services to be ready.
+
+<ParamField path="timeout" type="Duration" optional>
+  Maximum time to wait.
+</ParamField>
+
+<ParamField path="ignorePendingAsyncCreation" type="bool" default="false">
+  Whether to ignore services still being created asynchronously.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+**Example:**
+
+```dart
+class AppModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    // Wait for all async services to be ready
+    await locator.allReady(timeout: Duration(seconds: 30));
+    print('All services initialized');
+  }
+}
+```
+
+## Complete Example
+
+```dart
+import 'package:nest_core/core.dart';
+
+// Service classes
+class Database {
+  Future<void> connect() async {
+    print('Database connected');
+  }
+}
+
+class UserRepository {
+  final Database db;
+  UserRepository(this.db);
+}
+
+class UserService {
+  final UserRepository repository;
+  UserService(this.repository);
+}
+
+class CacheService {
+  void clear() => print('Cache cleared');
+}
+
+// Module using Locator
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  List<Type> get exports => [UserService];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    // Get dependency from imported module
+    final database = locator.get<Database>();
+    
+    // Register factory (new instance each time)
+    locator.registerFactory<DateTime>(
+      () => DateTime.now(),
+    );
+    
+    // Register singleton (immediate creation)
+    locator.registerSingleton<UserRepository>(
+      UserRepository(database),
+      dispose: (repo) => print('Repository disposed'),
+    );
+    
+    // Register lazy singleton (created on first access)
+    locator.registerLazySingleton<UserService>(
+      () => UserService(locator.get<UserRepository>()),
+    );
+    
+    // Optional dependency
+    if (locator.isRegistered<CacheService>()) {
+      final cache = locator.get<CacheService>();
+      print('Cache service available');
+    }
+    
+    // Using call syntax
+    final service = locator<UserService>();
+  }
+}
+```
+
+## Registration Strategies Comparison
+
+| Strategy | Creation Time | Instances | Use Case |
+|----------|--------------|-----------|----------|
+| `registerSingleton` | Immediate | Single (reused) | Eagerly initialized services |
+| `registerLazySingleton` | On first access | Single (reused) | Most services (recommended) |
+| `registerFactory` | Every access | New each time | Stateful objects, timestamps |
+
+## Best Practices
+
+1. **Prefer lazy singletons**: Use `registerLazySingleton` for most services
+2. **Use factories for stateful objects**: Register factories when you need fresh instances
+3. **Check before accessing**: Use `isRegistered` for optional dependencies
+4. **Dispose properly**: Always provide disposal functions for services that allocate resources
+5. **Use named instances sparingly**: Only use `instanceName` when you truly need multiple instances of the same type
+6. **Don't bypass exports**: Respect the module system by only accessing exported services

@@ -1,0 +1,519 @@
+---
+title: "Module"
+description: "Flutter Module class with routing support for organizing dependencies and routes"
+---
+
+## Overview
+
+The `Module` class extends `nest_core.Module` with routing capabilities through the `RouteMixin`. It provides a way to organize both dependency injection providers and route definitions in a cohesive module structure.
+
+## Class Definition
+
+```dart
+abstract class Module extends nest_core.Module with RouteMixin {}
+```
+
+The Flutter `Module` class combines:
+- **Dependency Injection**: From `nest_core.Module` (providers, imports, exports)
+- **Routing Support**: From `RouteMixin` (routes, route prefixes, route collection)
+
+## Inheritance
+
+```
+Object
+  └─ nest_core.Module
+       └─ Module (with RouteMixin)
+```
+
+## Creating a Module
+
+### Basic Module
+
+```dart
+import 'package:nest_flutter/nest_flutter.dart';
+import 'package:go_router/go_router.dart';
+
+class HomeModule extends Module {
+  @override
+  List<Provider> get providers => [
+    Provider.singleton<HomeService>(() => HomeService()),
+    Provider.factory<HomeRepository>(() => HomeRepository()),
+  ];
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/home',
+      builder: (context, state) => HomeScreen(),
+    ),
+  ];
+}
+```
+
+### Module with Imports
+
+```dart
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    AuthModule(),
+    UserModule(),
+    HomeModule(),
+  ];
+  
+  @override
+  List<Provider> get providers => [
+    Provider.singleton<AppService>(() => AppService()),
+  ];
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/',
+      redirect: (context, state) => '/home',
+    ),
+  ];
+}
+```
+
+## RouteMixin API
+
+The `RouteMixin` adds routing capabilities to modules.
+
+### routes
+
+Define the routes provided by this module.
+
+```dart
+List<RouteBase> get routes => []
+```
+
+<ResponseField name="returns" type="List<RouteBase>">
+  A list of GoRouter routes. These routes will be automatically collected and registered with the router.
+</ResponseField>
+
+#### Usage Example
+
+```dart
+class UserModule extends Module {
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/users',
+      builder: (context, state) => UserListScreen(),
+      routes: [
+        GoRoute(
+          path: ':id',
+          builder: (context, state) {
+            final userId = state.pathParameters['id']!;
+            return UserDetailScreen(userId: userId);
+          },
+        ),
+      ],
+    ),
+    GoRoute(
+      path: '/profile',
+      builder: (context, state) => ProfileScreen(),
+    ),
+  ];
+}
+```
+
+---
+
+### routePrefix
+
+Optional prefix to prepend to all routes in this module.
+
+```dart
+String? get routePrefix => null
+```
+
+<ResponseField name="returns" type="String?">
+  The route prefix, or `null` for no prefix. Useful for organizing routes under a common path segment.
+</ResponseField>
+
+<Note>
+  Route prefixes are automatically normalized to start with `/` and not end with `/`.
+</Note>
+
+#### Usage Example
+
+```dart
+class AdminModule extends Module {
+  @override
+  String get routePrefix => '/admin';
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/dashboard',  // Becomes: /admin/dashboard
+      builder: (context, state) => AdminDashboard(),
+    ),
+    GoRoute(
+      path: '/users',      // Becomes: /admin/users
+      builder: (context, state) => AdminUsersScreen(),
+    ),
+    GoRoute(
+      path: '/settings',   // Becomes: /admin/settings
+      builder: (context, state) => AdminSettings(),
+    ),
+  ];
+}
+```
+
+#### Prefix Normalization
+
+```dart
+// Input variations that all produce the same result:
+routePrefix => '/admin';   // OK
+routePrefix => 'admin';    // Normalized to: /admin
+routePrefix => '/admin/';  // Normalized to: /admin
+routePrefix => 'admin/';   // Normalized to: /admin
+
+// Route path variations:
+path: '/dashboard';  // OK
+path: 'dashboard';   // Normalized to: /dashboard
+
+// Final result: /admin/dashboard
+```
+
+---
+
+### collectAllRoutes()
+
+Collect all routes from this module and its imports recursively.
+
+```dart
+List<RouteBase> collectAllRoutes([Set<Type>? processedModuleTypes])
+```
+
+<ParamField path="processedModuleTypes" type="Set<Type>?">
+  Internal parameter used to track processed module types and prevent duplicates. You typically don't need to provide this.
+</ParamField>
+
+<ResponseField name="returns" type="List<RouteBase>">
+  A flat list of all routes from this module and all imported modules, with prefixes applied.
+</ResponseField>
+
+<Note>
+  This method prevents duplicate processing of the same module type. If a module type appears multiple times in the import tree, it's only processed once.
+</Note>
+
+#### Collection Order
+
+1. Routes from imported modules (depth-first)
+2. Routes from the current module
+3. Route prefixes are applied to each module's routes
+4. Duplicate module types are skipped
+
+#### Usage Example
+
+```dart
+// Typically called internally by Modular.router()
+// But you can call it manually if needed:
+
+final appModule = AppModule();
+final allRoutes = appModule.collectAllRoutes();
+
+print('Total routes: ${allRoutes.length}');
+for (final route in allRoutes) {
+  if (route is GoRoute) {
+    print('Route: ${route.path}');
+  }
+}
+```
+
+## Inherited from nest_core.Module
+
+The Flutter `Module` class inherits all properties from `nest_core.Module`:
+
+### providers
+
+List of dependency injection providers.
+
+```dart
+List<Provider> get providers => []
+```
+
+#### Usage Example
+
+```dart
+class UserModule extends Module {
+  @override
+  List<Provider> get providers => [
+    // Singleton - single instance shared across app
+    Provider.singleton<UserRepository>(
+      () => UserRepository(Modular.get<Database>()),
+    ),
+    
+    // Factory - new instance each time
+    Provider.factory<UserService>(
+      () => UserService(Modular.get<UserRepository>()),
+    ),
+    
+    // Lazy singleton - created on first access
+    Provider.lazySingleton<UserCache>(
+      () => UserCache(),
+    ),
+    
+    // Async singleton - asynchronous initialization
+    Provider.asyncSingleton<UserDatabase>(
+      () async => await UserDatabase.initialize(),
+    ),
+  ];
+}
+```
+
+---
+
+### imports
+
+List of modules to import.
+
+```dart
+List<Module> get imports => []
+```
+
+<Note>
+  Imported modules make their exported providers available to this module and collect their routes.
+</Note>
+
+#### Usage Example
+
+```dart
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    CoreModule(),
+    AuthModule(),
+    UserModule(),
+    ProductModule(),
+  ];
+}
+```
+
+---
+
+### exports
+
+List of provider types to export to importing modules.
+
+```dart
+List<Type> get exports => []
+```
+
+#### Usage Example
+
+```dart
+class CoreModule extends Module {
+  @override
+  List<Provider> get providers => [
+    Provider.singleton<Database>(() => Database()),
+    Provider.singleton<Logger>(() => Logger()),
+    Provider.singleton<Config>(() => Config()),
+  ];
+  
+  @override
+  List<Type> get exports => [
+    Database,  // Available to importing modules
+    Logger,    // Available to importing modules
+    // Config is NOT exported - private to CoreModule
+  ];
+}
+
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [CoreModule()];
+  
+  @override
+  List<Provider> get providers => [
+    Provider.singleton<UserRepository>(
+      // Can access Database and Logger because they're exported
+      () => UserRepository(
+        Modular.get<Database>(),
+        Modular.get<Logger>(),
+      ),
+    ),
+  ];
+}
+```
+
+## Complete Module Example
+
+### Feature Module
+
+```dart
+import 'package:nest_flutter/nest_flutter.dart';
+import 'package:go_router/go_router.dart';
+
+class ProductModule extends Module {
+  @override
+  String get routePrefix => '/products';
+  
+  @override
+  List<Provider> get providers => [
+    Provider.singleton<ProductRepository>(
+      () => ProductRepository(Modular.get<Database>()),
+    ),
+    Provider.factory<ProductService>(
+      () => ProductService(Modular.get<ProductRepository>()),
+    ),
+    Provider.lazySingleton<ProductCache>(
+      () => ProductCache(),
+    ),
+  ];
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/',              // Becomes: /products
+      builder: (context, state) => ProductListScreen(),
+      routes: [
+        GoRoute(
+          path: ':id',        // Becomes: /products/:id
+          builder: (context, state) {
+            final productId = state.pathParameters['id']!;
+            return ProductDetailScreen(productId: productId);
+          },
+        ),
+      ],
+    ),
+    GoRoute(
+      path: '/create',        // Becomes: /products/create
+      builder: (context, state) => CreateProductScreen(),
+    ),
+  ];
+}
+```
+
+### Root Application Module
+
+```dart
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    CoreModule(),
+    AuthModule(),
+    UserModule(),
+    ProductModule(),
+    OrderModule(),
+  ];
+  
+  @override
+  List<Provider> get providers => [
+    Provider.singleton<AppService>(
+      () => AppService(
+        Modular.get<AuthService>(),
+        Modular.get<Logger>(),
+      ),
+    ),
+  ];
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/',
+      redirect: (context, state) => '/home',
+    ),
+    GoRoute(
+      path: '/home',
+      builder: (context, state) => HomeScreen(),
+    ),
+  ];
+}
+```
+
+### Module with Shared Services
+
+```dart
+class CoreModule extends Module {
+  @override
+  List<Provider> get providers => [
+    Provider.singleton<Database>(
+      () => Database('app.db'),
+    ),
+    Provider.singleton<Logger>(
+      () => Logger(),
+    ),
+    Provider.singleton<ApiClient>(
+      () => ApiClient(
+        baseUrl: 'https://api.example.com',
+        logger: Modular.get<Logger>(),
+      ),
+    ),
+  ];
+  
+  @override
+  List<Type> get exports => [
+    Database,
+    Logger,
+    ApiClient,
+  ];
+  
+  // Core module typically has no routes
+  @override
+  List<RouteBase> get routes => [];
+}
+```
+
+## Duplicate Module Prevention
+
+<Warning>
+  If the same module type appears multiple times in the import tree, only the first occurrence is processed. This prevents duplicate route registration and circular dependencies.
+</Warning>
+
+```dart
+class SharedModule extends Module {
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(path: '/shared', builder: (context, state) => SharedScreen()),
+  ];
+}
+
+class ModuleA extends Module {
+  @override
+  List<Module> get imports => [SharedModule()];
+}
+
+class ModuleB extends Module {
+  @override
+  List<Module> get imports => [SharedModule()];
+}
+
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    ModuleA(),
+    ModuleB(),
+  ];
+}
+
+// Result: SharedModule is only processed once
+// The /shared route is only registered once
+```
+
+## Best Practices
+
+<Note>
+  **Organize by feature**: Create one module per feature area (auth, user, product, etc.) with its own services and routes.
+</Note>
+
+<Note>
+  **Use route prefixes for organization**: Group related routes under a common prefix to create clear URL hierarchies.
+</Note>
+
+<Note>
+  **Export shared services**: Use a CoreModule or SharedModule to provide common services to other modules.
+</Note>
+
+<Warning>
+  **Avoid circular imports**: Don't create circular dependencies between modules. Use a shared module for common dependencies.
+</Warning>
+
+## See Also
+
+- [ModularApp](/api/flutter/modular-app) - Root widget initialization
+- [Modular Class](/api/flutter/modular) - Static API for service resolution
+- [Routing](/api/flutter/routing) - Route collection and GoRouter integration
+- [Providers](/core/providers) - Dependency injection provider types

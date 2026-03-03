@@ -1,0 +1,499 @@
+---
+title: 'Testing Strategies'
+description: 'Learn how to test modules, services, and the dependency injection container'
+---
+
+# Testing Strategies
+
+Nest Dart provides powerful testing capabilities through container isolation and module-based dependency injection.
+
+## Container Reset for Tests
+
+The `ApplicationContainer` provides a `reset()` method essential for test isolation:
+
+```dart
+import 'package:test/test.dart';
+import 'package:nest_core/nest_core.dart';
+import 'package:your_app/app_module.dart';
+
+void main() {
+  late ApplicationContainer container;
+
+  setUp(() async {
+    container = ApplicationContainer();
+    await container.registerModule(AppModule());
+  });
+
+  tearDown(() async {
+    await container.reset();
+  });
+
+  test('should initialize services correctly', () async {
+    final userService = container.get<UserService>();
+    expect(userService, isNotNull);
+  });
+}
+```
+
+### How Reset Works
+
+From `packages/nest_core/lib/src/container.dart:260-287`:
+
+```dart
+Future<void> reset() async {
+  // Destroy modules in reverse order of initialization
+  final modulesToDestroy = List<Module>.from(_initializedModules.reversed);
+
+  for (final module in modulesToDestroy) {
+    try {
+      print('Destroying module: ${module.runtimeType}');
+      final scopedLocator = _ScopedGetIt(
+        _getIt,
+        _context,
+        module.runtimeType,
+      );
+      await module.onModuleDestroy(scopedLocator, _context);
+      print('Module destroyed successfully: ${module.runtimeType}');
+    } catch (e) {
+      print('Error destroying module ${module.runtimeType}: $e');
+    }
+  }
+
+  _getIt.reset();
+  _modules.clear();
+  _initializedModules.clear();
+  _context.moduleExports.clear();
+  _context.moduleImports.clear();
+  _context.serviceToModule.clear();
+  _context.globalServices.clear();
+  _isReady = false;
+}
+```
+
+<Note>
+Modules are destroyed in reverse initialization order, ensuring dependencies are cleaned up before their dependents.
+</Note>
+
+## Testing Modules in Isolation
+
+Test individual modules without initializing the entire application:
+
+```dart
+import 'package:test/test.dart';
+import 'package:nest_core/nest_core.dart';
+import 'package:your_app/modules/user_module.dart';
+import 'package:your_app/modules/database_module.dart';
+
+void main() {
+  group('UserModule', () {
+    late ApplicationContainer container;
+
+    setUp(() async {
+      container = ApplicationContainer();
+      // Only register the modules needed for this test
+      await container.registerModule(
+        UserModule()..imports = [DatabaseModule()],
+      );
+    });
+
+    tearDown(() async {
+      await container.reset();
+    });
+
+    test('should provide UserService', () {
+      expect(container.isRegistered<UserService>(), isTrue);
+    });
+
+    test('should export UserService', () {
+      final userService = container.get<UserService>();
+      expect(userService, isA<UserService>());
+    });
+  });
+}
+```
+
+## Mocking Dependencies
+
+### Using Test Doubles
+
+Create test modules with mocked services:
+
+```dart
+import 'package:mocktail/mocktail.dart';
+import 'package:test/test.dart';
+import 'package:nest_core/nest_core.dart';
+
+class MockUserRepository extends Mock implements UserRepository {}
+class MockDatabaseService extends Mock implements DatabaseService {}
+
+class TestDatabaseModule extends Module {
+  final MockDatabaseService mockDatabase = MockDatabaseService();
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<DatabaseService>(mockDatabase);
+  }
+
+  @override
+  List<Type> get exports => [DatabaseService];
+}
+
+void main() {
+  group('UserService with mocked database', () {
+    late ApplicationContainer container;
+    late MockDatabaseService mockDatabase;
+
+    setUp(() async {
+      final testDbModule = TestDatabaseModule();
+      mockDatabase = testDbModule.mockDatabase;
+
+      container = ApplicationContainer();
+      await container.registerModule(
+        UserModule()..imports = [testDbModule],
+      );
+    });
+
+    tearDown(() async {
+      await container.reset();
+    });
+
+    test('should fetch users from database', () async {
+      // Arrange
+      when(() => mockDatabase.query('SELECT * FROM users'))
+          .thenAnswer((_) async => [
+                {'id': 1, 'name': 'John'},
+                {'id': 2, 'name': 'Jane'},
+              ]);
+
+      // Act
+      final userService = container.get<UserService>();
+      final users = await userService.getAllUsers();
+
+      // Assert
+      expect(users, hasLength(2));
+      verify(() => mockDatabase.query('SELECT * FROM users')).called(1);
+    });
+  });
+}
+```
+
+### Factory-Based Mocking
+
+Inject mock factories for more control:
+
+```dart
+class TestUserModule extends Module {
+  final UserRepository mockRepository;
+
+  TestUserModule(this.mockRepository);
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<UserRepository>(mockRepository);
+    locator.registerFactory<UserService>(
+      () => UserService(locator.get<UserRepository>()),
+    );
+  }
+
+  @override
+  List<Type> get exports => [UserService];
+}
+
+void main() {
+  test('UserService with custom mock', () async {
+    final mockRepo = MockUserRepository();
+    when(() => mockRepo.findById(1))
+        .thenAnswer((_) async => User(id: 1, name: 'Test'));
+
+    final container = ApplicationContainer();
+    await container.registerModule(TestUserModule(mockRepo));
+
+    final userService = container.get<UserService>();
+    final user = await userService.getUser(1);
+
+    expect(user.name, equals('Test'));
+    await container.reset();
+  });
+}
+```
+
+## Testing Route Handlers (Dart Frog)
+
+Test Dart Frog routes with mocked dependencies:
+
+```dart
+import 'dart:io';
+import 'package:dart_frog/dart_frog.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:test/test.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+class MockRequestContext extends Mock implements RequestContext {}
+
+void main() {
+  group('GET /users', () {
+    late ApplicationContainer container;
+    late MockUserService mockUserService;
+
+    setUp(() async {
+      mockUserService = MockUserService();
+      
+      final testModule = TestModule(mockUserService);
+      await Modular.initialize(testModule);
+    });
+
+    tearDown(() async {
+      await Modular.reset();
+    });
+
+    test('responds with list of users', () async {
+      // Arrange
+      when(() => mockUserService.getAllUsers())
+          .thenAnswer((_) async => [
+                User(id: 1, name: 'John'),
+                User(id: 2, name: 'Jane'),
+              ]);
+
+      final context = MockRequestContext();
+
+      // Act
+      final response = await onRequest(context);
+
+      // Assert
+      expect(response.statusCode, equals(HttpStatus.ok));
+      final body = await response.json();
+      expect(body, hasLength(2));
+    });
+  });
+}
+```
+
+## Testing Module Lifecycle
+
+Test `onModuleInit` and `onModuleDestroy` hooks:
+
+```dart
+class TestableModule extends Module {
+  bool isInitialized = false;
+  bool isDestroyed = false;
+
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    isInitialized = true;
+    // Simulate initialization work
+    await Future.delayed(Duration(milliseconds: 100));
+  }
+
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    isDestroyed = true;
+    // Simulate cleanup work
+    await Future.delayed(Duration(milliseconds: 50));
+  }
+}
+
+void main() {
+  test('module lifecycle hooks are called', () async {
+    final module = TestableModule();
+    final container = ApplicationContainer();
+
+    // Test initialization
+    await container.registerModule(module);
+    expect(module.isInitialized, isTrue);
+    expect(module.isDestroyed, isFalse);
+
+    // Test destruction
+    await container.reset();
+    expect(module.isDestroyed, isTrue);
+  });
+}
+```
+
+## Testing Service Exports and Access Control
+
+Verify that modules properly enforce export restrictions:
+
+```dart
+import 'package:nest_core/nest_core.dart';
+import 'package:test/test.dart';
+
+class PrivateService {}
+class PublicService {}
+
+class ProviderModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<PrivateService>(PrivateService());
+    locator.registerSingleton<PublicService>(PublicService());
+  }
+
+  @override
+  List<Type> get exports => [PublicService]; // Only export PublicService
+}
+
+class ConsumerModule extends Module {
+  @override
+  List<Module> get imports => [ProviderModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    // This should work - PublicService is exported
+    final publicService = locator.get<PublicService>();
+    
+    // This should throw - PrivateService is not exported
+    // final privateService = locator.get<PrivateService>();
+  }
+}
+
+void main() {
+  test('should enforce export restrictions', () async {
+    final container = ApplicationContainer();
+    await container.registerModule(ConsumerModule());
+
+    // Public service should be accessible
+    expect(
+      () => container.get<PublicService>(),
+      returnsNormally,
+    );
+
+    // Private service should throw
+    expect(
+      () => container.get<PrivateService>(),
+      throwsA(isA<ServiceNotExportedException>()),
+    );
+
+    await container.reset();
+  });
+}
+```
+
+<Warning>
+Always verify export restrictions in tests to ensure modules maintain proper encapsulation.
+</Warning>
+
+## Integration Testing
+
+Test full application flow with real modules:
+
+```dart
+import 'package:test/test.dart';
+import 'package:nest_core/nest_core.dart';
+import 'package:your_app/app_module.dart';
+
+void main() {
+  group('Integration Tests', () {
+    late ApplicationContainer container;
+
+    setUp(() async {
+      container = ApplicationContainer();
+      await container.registerModule(AppModule());
+      await container.waitUntilReady();
+    });
+
+    tearDown(() async {
+      await container.reset();
+    });
+
+    test('full user creation flow', () async {
+      // Get services from container
+      final userService = container.get<UserService>();
+      final emailService = container.get<EmailService>();
+      
+      // Create user
+      final user = await userService.createUser(
+        name: 'John Doe',
+        email: 'john@example.com',
+      );
+
+      // Verify user was created
+      expect(user.id, isNotNull);
+      expect(user.name, equals('John Doe'));
+
+      // Verify welcome email was sent
+      final sentEmails = emailService.getSentEmails();
+      expect(sentEmails, hasLength(1));
+      expect(sentEmails.first.to, equals('john@example.com'));
+    });
+  });
+}
+```
+
+## Best Practices
+
+### 1. Always Reset Container
+
+```dart
+void main() {
+  setUp(() async {
+    // Initialize fresh container for each test
+    container = ApplicationContainer();
+    await container.registerModule(TestModule());
+  });
+
+  tearDown(() async {
+    // Always reset to ensure test isolation
+    await container.reset();
+  });
+}
+```
+
+### 2. Use Test Modules
+
+```dart
+// Create dedicated test modules
+class TestModule extends Module {
+  final MockDatabaseService mockDb;
+  
+  TestModule(this.mockDb);
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<DatabaseService>(mockDb);
+  }
+}
+```
+
+### 3. Test Lifecycle Hooks
+
+```dart
+test('modules initialize in correct order', () async {
+  final initOrder = <String>[];
+  
+  final moduleA = TrackingModule('A', initOrder);
+  final moduleB = TrackingModule('B', initOrder);
+  
+  final container = ApplicationContainer();
+  await container.registerModule(
+    moduleA..imports = [moduleB],
+  );
+  
+  // Dependencies should initialize first
+  expect(initOrder, equals(['B', 'A']));
+  
+  await container.reset();
+});
+```
+
+### 4. Verify Export Behavior
+
+```dart
+test('services are properly exported', () async {
+  final container = ApplicationContainer();
+  await container.registerModule(YourModule());
+  
+  // Verify exported services are accessible
+  expect(() => container.get<ExportedService>(), returnsNormally);
+  
+  // Verify private services are not accessible
+  expect(
+    () => container.get<PrivateService>(),
+    throwsA(isA<ServiceNotExportedException>()),
+  );
+  
+  await container.reset();
+});
+```
+
+<Tip>
+Use the `isRegistered<T>()` method to check if a service is available before attempting to access it in tests.
+</Tip>

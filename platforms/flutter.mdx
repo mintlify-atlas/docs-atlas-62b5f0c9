@@ -1,0 +1,436 @@
+---
+title: Flutter Integration
+description: Build modular Flutter applications with Nest Dart's dependency injection and routing
+---
+
+# Flutter Integration
+
+The `nest_flutter` package provides seamless integration between Nest Dart's modular architecture and Flutter applications, with built-in support for GoRouter navigation.
+
+## Installation
+
+Add the dependency to your `pubspec.yaml`:
+
+```yaml
+dependencies:
+  nest_flutter: ^latest
+```
+
+## Quick Start
+
+<Steps>
+  <Step title="Create Your Module">
+    Define a module with your services and routes:
+
+    ```dart
+    import 'package:nest_flutter/nest_flutter.dart';
+
+    class TodoModule extends Module {
+      @override
+      List<Module> get imports => [CoreModule()];
+
+      @override
+      Future<void> providers(Locator locator) async {
+        locator.registerSingleton<TodoService>(
+          JsonPlaceholderTodoService(client: locator.get<Client>()),
+        );
+        locator.registerSingleton<TodoProvider>(
+          TodoProvider(locator.get<TodoService>(), locator.get<ConfigPreference>()),
+        );
+      }
+
+      @override
+      List<Type> get exports => [TodoService, TodoProvider];
+
+      @override
+      String? get routePrefix => '/todos';
+
+      @override
+      List<RouteBase> get routes => [
+        GoRoute(path: '/', builder: (context, state) => const TodoListView()),
+        GoRoute(
+          path: '/:id',
+          builder: (context, state) => TodoDetailView(
+            todoId: int.tryParse(state.pathParameters['id'] ?? '0') ?? 0,
+          ),
+        ),
+      ];
+    }
+    ```
+  </Step>
+
+  <Step title="Create App Module">
+    Create a root module that imports all feature modules:
+
+    ```dart
+    class AppModule extends Module {
+      @override
+      List<Module> get imports => [
+        SplashModule(),
+        TodoModule(),
+      ];
+
+      @override
+      Future<void> providers(Locator _) async {}
+    }
+    ```
+  </Step>
+
+  <Step title="Wrap Your App with ModularApp">
+    Initialize the module system in your main function:
+
+    ```dart
+    import 'package:flutter/material.dart';
+    import 'package:nest_flutter/nest_flutter.dart';
+
+    void main() {
+      WidgetsFlutterBinding.ensureInitialized();
+      runApp(ModularApp(module: AppModule(), child: const MainApp()));
+    }
+
+    class MainApp extends StatelessWidget {
+      const MainApp({super.key});
+
+      @override
+      Widget build(BuildContext context) {
+        return MaterialApp.router(
+          routerConfig: Modular.router((router) {
+            return GoRouter(
+              routes: router.configuration.routes,
+              initialLocation: '/todos',
+              debugLogDiagnostics: true,
+            );
+          }),
+        );
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## ModularApp Widget
+
+The `ModularApp` widget is the entry point for Nest Flutter integration. It initializes the dependency injection container and makes services available throughout your app.
+
+### Properties
+
+- `module` (required): The root module of your application
+- `child` (required): Your app widget
+- `container`: Optional custom ApplicationContainer instance
+- `loading`: Optional loading widget shown during initialization
+
+<Note>
+  The `ModularApp` widget automatically handles async module initialization. All services registered in `providers()` methods are available after initialization completes.
+</Note>
+
+## Accessing Dependencies
+
+Nest Flutter provides multiple ways to access your services:
+
+### Using Modular.get()
+
+Access services from anywhere in your widget tree:
+
+```dart
+import 'package:nest_flutter/nest_flutter.dart';
+
+class MainApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (context) => Modular.get<TodoProvider>(),
+      child: MaterialApp.router(
+        routerConfig: Modular.router((router) => router),
+      ),
+    );
+  }
+}
+```
+
+### Using Modular.of(context)
+
+Access the container through the widget context:
+
+```dart
+final container = Modular.of(context);
+final service = container.get<MyService>();
+```
+
+### Available Methods
+
+<CodeGroup>
+
+```dart Get Service
+final service = Modular.get<UserService>();
+```
+
+```dart Get with Instance Name
+final service = Modular.get<UserService>(instanceName: 'premium');
+```
+
+```dart Get Async Service
+final service = await Modular.getAsync<UserService>();
+```
+
+```dart Get with Parameters
+final service = Modular.getWithParams<UserService>(param1, param2);
+```
+
+```dart Check if Registered
+if (Modular.isRegistered<UserService>()) {
+  // Service is available
+}
+```
+
+```dart Get Available Services
+final services = Modular.getAvailableServices();
+print('Available: $services');
+```
+
+</CodeGroup>
+
+## Module-Based Routing
+
+Nest Flutter extends the base `Module` class with the `RouteMixin` to support GoRouter integration.
+
+### RouteMixin
+
+Add routes directly to your modules:
+
+```dart
+class TodoModule extends Module {
+  @override
+  String? get routePrefix => '/todos';
+
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/',
+      builder: (context, state) => const TodoListView(),
+    ),
+    GoRoute(
+      path: '/:id',
+      builder: (context, state) => TodoDetailView(
+        todoId: int.tryParse(state.pathParameters['id'] ?? '0') ?? 0,
+      ),
+    ),
+  ];
+}
+```
+
+<Tip>
+  Routes are automatically prefixed with the module's `routePrefix`. In the example above, the routes become `/todos/` and `/todos/:id`.
+</Tip>
+
+### Nested Routes
+
+Create hierarchical route structures:
+
+```dart
+class ModuleB extends Module {
+  @override
+  String? get routePrefix => '/module-b';
+
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/',
+      builder: (context, state) => const ModuleBHome(),
+      routes: [
+        GoRoute(
+          path: 'second',
+          builder: (context, state) => const ModuleBSecond(),
+        ),
+      ],
+    ),
+  ];
+}
+```
+
+This creates:
+- `/module-b/` - Main page
+- `/module-b/second` - Nested page
+
+### Router Configuration
+
+Customize the GoRouter instance:
+
+```dart
+MaterialApp.router(
+  routerConfig: Modular.router((router) {
+    return GoRouter(
+      routes: router.configuration.routes,
+      initialLocation: '/todos',
+      debugLogDiagnostics: true,
+      redirect: (context, state) {
+        // Custom redirect logic
+        return null;
+      },
+      errorBuilder: (context, state) {
+        return ErrorPage(error: state.error);
+      },
+    );
+  }),
+)
+```
+
+<Note>
+  The router is cached to prevent recreation during hot reloads. Use `Modular.clearRouterCache()` if you need to force router recreation.
+</Note>
+
+### Router Cache Management
+
+```dart
+// Clear the cached router
+Modular.clearRouterCache();
+
+// Check if router is cached
+if (Modular.isRouterCached) {
+  print('Router is cached');
+}
+
+// Get cached router instance
+final cachedRouter = Modular.cachedRouter;
+```
+
+## Navigation
+
+Use standard GoRouter navigation methods:
+
+```dart
+import 'package:go_router/go_router.dart';
+
+// Navigate to a route
+context.push('/todos/1');
+
+// Navigate and replace
+context.pushReplacement('/todos');
+
+// Go to a route (removes all previous routes)
+context.go('/todos');
+
+// Navigate back
+context.pop();
+```
+
+## Complete Example
+
+Here's a complete example with modules, routes, and dependency injection:
+
+<CodeGroup>
+
+```dart main.dart
+import 'package:flutter/material.dart';
+import 'package:nest_flutter/nest_flutter.dart';
+import 'package:provider/provider.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(ModularApp(module: AppModule(), child: const MainApp()));
+}
+
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    SplashModule(),
+    TodoModule(),
+  ];
+
+  @override
+  Future<void> providers(Locator _) async {}
+}
+
+class MainApp extends StatelessWidget {
+  const MainApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (context) => Modular.get<TodoProvider>(),
+      child: MaterialApp.router(
+        routerConfig: Modular.router((router) {
+          return GoRouter(
+            routes: router.configuration.routes,
+            initialLocation: '/todos',
+            debugLogDiagnostics: true,
+          );
+        }),
+      ),
+    );
+  }
+}
+```
+
+```dart core_module.dart
+import 'package:nest_flutter/nest_flutter.dart';
+import 'package:http/http.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class CoreModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<Client>(Client());
+    final prefs = await SharedPreferences.getInstance();
+    locator.registerSingleton<SharedPreferences>(prefs);
+    locator.registerSingleton<ConfigPreference>(ConfigPreference(prefs));
+  }
+
+  @override
+  List<Type> get exports => [Client, SharedPreferences, ConfigPreference];
+}
+```
+
+```dart todo_module.dart
+import 'package:flutter/widgets.dart';
+import 'package:nest_flutter/nest_flutter.dart';
+
+class TodoModule extends Module {
+  @override
+  List<Module> get imports => [CoreModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<TodoService>(
+      JsonPlaceholderTodoService(client: locator.get<Client>()),
+    );
+    locator.registerSingleton<TodoProvider>(
+      TodoProvider(locator.get<TodoService>(), locator.get<ConfigPreference>()),
+    );
+  }
+
+  @override
+  List<Type> get exports => [TodoService, TodoProvider];
+
+  @override
+  String? get routePrefix => '/todos';
+
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(path: '/', builder: (context, state) => const TodoListView()),
+    GoRoute(
+      path: '/:id',
+      builder: (context, state) => TodoDetailView(
+        todoId: int.tryParse(state.pathParameters['id'] ?? '0') ?? 0,
+      ),
+    ),
+  ];
+}
+```
+
+</CodeGroup>
+
+## Best Practices
+
+<Tip>
+  - Keep modules focused on specific features or domains
+  - Use `exports` to control which services are accessible to other modules
+  - Leverage `routePrefix` to organize routes hierarchically
+  - Use the `loading` property of `ModularApp` for custom loading UI
+  - Cache router to prevent recreation on hot reload
+</Tip>
+
+## See Also
+
+- [Core Concepts](/core/modules/modules) - Learn about the module system
+- [Dependency Injection](/core/modules/dependency-injection) - Understand the DI container
+- [Dart Frog Integration](/platforms/dart-frog) - Backend integration

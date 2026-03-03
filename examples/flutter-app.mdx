@@ -1,0 +1,504 @@
+---
+title: "Flutter App Example"
+description: "Complete walkthrough of building a Flutter app with Nest Dart modules, dependency injection, and routing"
+---
+
+## Overview
+
+This example demonstrates a complete Flutter application built with Nest Dart, featuring:
+
+- Modular architecture with dependency injection
+- Route management with go_router integration
+- Service-based architecture for API calls
+- State management with Provider
+- Multiple modules with shared dependencies
+
+## Project Structure
+
+```
+flutter_app/
+├── lib/
+│   ├── main.dart                 # App entry point
+│   ├── models/
+│   │   └── todo.dart            # Todo data model
+│   ├── modules/
+│   │   ├── core_module.dart     # Core services module
+│   │   ├── splash_module.dart   # Splash screen module
+│   │   └── todo_module.dart     # Todo feature module
+│   ├── providers/
+│   │   └── todo_provider.dart   # State management
+│   ├── services/
+│   │   └── todo_service.dart    # API service
+│   ├── utils/
+│   │   ├── config_preference.dart
+│   │   └── preference_keys.dart
+│   └── views/
+│       ├── todo_list_view.dart  # Todo list screen
+│       └── todo_detail_view.dart # Todo detail screen
+└── pubspec.yaml
+```
+
+## Getting Started
+
+<Steps>
+  <Step title="Install Dependencies">
+    Navigate to the example directory and install dependencies:
+
+    ```bash
+    cd examples/flutter_app
+    flutter pub get
+    ```
+  </Step>
+
+  <Step title="Run the Application">
+    Launch the app on your connected device or emulator:
+
+    ```bash
+    flutter run
+    ```
+  </Step>
+
+  <Step title="Explore Features">
+    The app will launch with a todo list that:
+    - Fetches todos from JSONPlaceholder API
+    - Displays them in a scrollable list
+    - Allows navigation to individual todo details
+    - Supports pull-to-refresh
+  </Step>
+</Steps>
+
+## Module Organization
+
+### App Module
+
+The root module imports all feature modules and initializes the app:
+
+```dart lib/main.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_app/modules/splash_module.dart';
+import 'package:flutter_app/modules/todo_module.dart';
+import 'package:nest_flutter/nest_flutter.dart';
+import 'package:provider/provider.dart' hide Locator;
+import 'package:go_router/go_router.dart';
+import 'providers/todo_provider.dart';
+
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    SplashModule(),
+    TodoModule(),
+    ModuleA(),
+    ModuleB(),
+  ];
+
+  @override
+  Future<void> providers(Locator _) async {}
+}
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(ModularApp(module: AppModule(), child: const MainApp()));
+}
+```
+
+### Core Module
+
+Provides shared services across the application:
+
+```dart lib/modules/core_module.dart
+import 'package:flutter_app/utils/config_preference.dart';
+import 'package:nest_flutter/nest_flutter.dart';
+import 'package:http/http.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class CoreModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<Client>(Client());
+    final prefs = await SharedPreferences.getInstance();
+    locator.registerSingleton<SharedPreferences>(prefs);
+    locator.registerSingleton<ConfigPreference>(ConfigPreference(prefs));
+  }
+
+  @override
+  List<Type> get exports => [Client, SharedPreferences, ConfigPreference];
+}
+```
+
+<Note>
+  The `exports` property makes these services available to other modules that import `CoreModule`.
+</Note>
+
+### Todo Module
+
+Encapsulates the todo feature with routes, services, and providers:
+
+```dart lib/modules/todo_module.dart
+import 'package:flutter/widgets.dart';
+import 'package:flutter_app/modules/core_module.dart';
+import 'package:flutter_app/services/todo_service.dart';
+import 'package:flutter_app/providers/todo_provider.dart';
+import 'package:flutter_app/utils/config_preference.dart';
+import 'package:flutter_app/views/todo_list_view.dart';
+import 'package:flutter_app/views/todo_detail_view.dart';
+import 'package:nest_flutter/nest_flutter.dart';
+import 'package:http/http.dart';
+
+class TodoModule extends Module {
+  @override
+  List<Module> get imports => [CoreModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<TodoService>(
+      JsonPlaceholderTodoService(client: locator.get<Client>()),
+    );
+    locator.registerSingleton<TodoProvider>(
+      TodoProvider(locator.get<TodoService>(), locator.get<ConfigPreference>()),
+    );
+  }
+
+  @override
+  List<Type> get exports => [TodoService, TodoProvider];
+
+  @override
+  String? get routePrefix => '/todos';
+
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(path: '/', builder: (context, state) => const TodoListView()),
+    GoRoute(
+      path: '/:id',
+      builder: (context, state) => TodoDetailView(
+        todoId: int.tryParse(state.pathParameters['id'] ?? '0') ?? 0,
+      ),
+    ),
+  ];
+}
+```
+
+## Route Setup
+
+Nest Flutter integrates seamlessly with go_router:
+
+```dart lib/main.dart
+class MainApp extends StatelessWidget {
+  const MainApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (context) => Modular.get<TodoProvider>(),
+      child: MaterialApp.router(
+        routerConfig: Modular.router((router) {
+          return GoRouter(
+            routes: router.configuration.routes,
+            initialLocation: '/todos',
+            debugLogDiagnostics: true,
+          );
+        }),
+      ),
+    );
+  }
+}
+```
+
+<Card title="Key Points" icon="lightbulb">
+  - `Modular.router()` collects routes from all modules
+  - Each module can define a `routePrefix` for its routes
+  - Routes automatically inherit the module's prefix
+  - Full go_router features available (parameters, guards, etc.)
+</Card>
+
+## Service Implementation
+
+The `TodoService` demonstrates dependency injection and API integration:
+
+```dart lib/services/todo_service.dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../models/todo.dart';
+
+abstract class TodoService {
+  Future<List<Todo>> getAllTodos();
+  Future<Todo> getTodoById(int id);
+}
+
+class JsonPlaceholderTodoService implements TodoService {
+  static const String _baseUrl = 'https://jsonplaceholder.typicode.com';
+  final http.Client _client;
+
+  JsonPlaceholderTodoService({http.Client? client})
+    : _client = client ?? http.Client();
+
+  @override
+  Future<List<Todo>> getAllTodos() async {
+    await Future.delayed(const Duration(seconds: 2));
+    try {
+      final response = await _client.get(
+        Uri.parse('$_baseUrl/todos'),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final List<dynamic> jsonList = json.decode(response.body);
+        return jsonList.map((json) => Todo.fromJson(json)).toList();
+      } else {
+        throw TodoServiceException(
+          'Failed to load todos: ${response.statusCode}',
+          response.statusCode,
+        );
+      }
+    } catch (e) {
+      if (e is TodoServiceException) rethrow;
+      throw TodoServiceException('Network error: $e');
+    }
+  }
+
+  @override
+  Future<Todo> getTodoById(int id) async {
+    try {
+      final response = await _client.get(
+        Uri.parse('$_baseUrl/todos/$id'),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> jsonMap = json.decode(response.body);
+        return Todo.fromJson(jsonMap);
+      } else if (response.statusCode == 404) {
+        throw TodoServiceException('Todo with ID $id not found', 404);
+      } else {
+        throw TodoServiceException(
+          'Failed to load todo: ${response.statusCode}',
+          response.statusCode,
+        );
+      }
+    } catch (e) {
+      if (e is TodoServiceException) rethrow;
+      throw TodoServiceException('Network error: $e');
+    }
+  }
+}
+
+class TodoServiceException implements Exception {
+  final String message;
+  final int? statusCode;
+
+  TodoServiceException(this.message, [this.statusCode]);
+
+  @override
+  String toString() => 'TodoServiceException: $message';
+}
+```
+
+## Using Services in Widgets
+
+Services are accessed through the Provider pattern:
+
+```dart lib/views/todo_list_view.dart
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+import '../models/todo.dart';
+import '../providers/todo_provider.dart';
+
+class TodoListView extends StatefulWidget {
+  const TodoListView({super.key});
+
+  @override
+  State<TodoListView> createState() => _TodoListViewState();
+}
+
+class _TodoListViewState extends State<TodoListView> {
+  @override
+  void initState() {
+    super.initState();
+    // Load todos when the widget initializes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<TodoProvider>().loadTodos();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Todos'),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          Consumer<TodoProvider>(
+            builder: (context, todoProvider, child) {
+              return IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: todoProvider.isLoading
+                    ? null
+                    : () => todoProvider.refreshTodos(),
+              );
+            },
+          ),
+        ],
+      ),
+      body: Consumer<TodoProvider>(
+        builder: (context, todoProvider, child) {
+          return _buildBody(todoProvider);
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showTodoByIdDialog(),
+        tooltip: 'View Todo by ID',
+        child: const Icon(Icons.search),
+      ),
+    );
+  }
+
+  Widget _buildBody(TodoProvider todoProvider) {
+    if (todoProvider.isLoading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Loading todos...'),
+          ],
+        ),
+      );
+    }
+
+    if (todoProvider.error != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, size: 64, color: Colors.red),
+            const SizedBox(height: 16),
+            Text(
+              'Error loading todos',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              todoProvider.error!,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: () => todoProvider.refreshTodos(),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => todoProvider.refreshTodos(),
+      child: ListView.builder(
+        itemCount: todoProvider.todos.length,
+        itemBuilder: (context, index) {
+          final todo = todoProvider.todos[index];
+          return _buildTodoTile(todo);
+        },
+      ),
+    );
+  }
+
+  Widget _buildTodoTile(Todo todo) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: todo.completed ? Colors.green : Colors.orange,
+          child: Text(
+            todo.id.toString(),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        title: Text(
+          todo.title,
+          style: TextStyle(
+            decoration: todo.completed ? TextDecoration.lineThrough : null,
+            color: todo.completed ? Colors.grey : null,
+          ),
+        ),
+        subtitle: Text('User ID: ${todo.userId}'),
+        trailing: Icon(
+          todo.completed ? Icons.check_circle : Icons.radio_button_unchecked,
+          color: todo.completed ? Colors.green : Colors.grey,
+        ),
+        onTap: () => context.push('/todos/${todo.id}'),
+      ),
+    );
+  }
+}
+```
+
+## Data Model
+
+The `Todo` model with JSON serialization:
+
+```dart lib/models/todo.dart
+class Todo {
+  final int id;
+  final int userId;
+  final String title;
+  final bool completed;
+
+  const Todo({
+    required this.id,
+    required this.userId,
+    required this.title,
+    required this.completed,
+  });
+
+  factory Todo.fromJson(Map<String, dynamic> json) {
+    return Todo(
+      id: json['id'] as int,
+      userId: json['userId'] as int,
+      title: json['title'] as String,
+      completed: json['completed'] as bool,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'userId': userId,
+      'title': title,
+      'completed': completed
+    };
+  }
+}
+```
+
+## Key Concepts Demonstrated
+
+<CardGroup cols={2}>
+  <Card title="Dependency Injection" icon="syringe">
+    Services are registered in modules and injected where needed, making testing and maintenance easier.
+  </Card>
+  
+  <Card title="Module Imports" icon="puzzle-piece">
+    TodoModule imports CoreModule to access shared services like HTTP client and preferences.
+  </Card>
+  
+  <Card title="Route Prefixes" icon="route">
+    Each module defines its own route prefix, creating clean URL structure automatically.
+  </Card>
+  
+  <Card title="Service Abstraction" icon="layer-group">
+    Abstract TodoService allows easy swapping of implementations for testing or different backends.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+- Explore the [Module System](/core/modules/modules) for advanced patterns
+- Learn about [Dependency Injection](/core/modules/dependency-injection)
+- Check out the [Frog Backend Example](/examples/frog-backend) for a complete backend
+- See [Flutter Integration](/integrations/flutter) for more Flutter-specific features

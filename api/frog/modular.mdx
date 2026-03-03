@@ -1,0 +1,331 @@
+---
+title: "Modular"
+description: "Unified Modular class for Dart Frog integration with dependency injection container management"
+---
+
+## Overview
+
+The `Modular` class provides a unified interface for managing the dependency injection container in Dart Frog applications. It combines container initialization, service registration, and context-based service access in a single, easy-to-use API.
+
+## Class: Modular
+
+### Static Methods
+
+#### initialize()
+
+Initializes the application container with the provided module configuration.
+
+```dart
+static Future<void> initialize(Module appModule)
+```
+
+<ParamField path="appModule" type="Module" required>
+  The root application module containing all service registrations and configurations.
+</ParamField>
+
+<Note>
+  This method must be called before accessing any services through `Modular.get()` or `Modular.of(context)`. It waits for the container to be fully ready before resolving.
+</Note>
+
+**Example:**
+
+```dart
+// In your _middleware.dart file
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../app_module.dart';
+
+Handler middleware(Handler handler) {
+  return handler
+    .use(nestFrogMiddleware(AppModule()));
+}
+```
+
+#### get\<T\>()
+
+Retrieves a service instance directly from the container.
+
+```dart
+static T get<T extends Object>()
+```
+
+<ParamField path="T" type="Type">
+  The type of service to retrieve from the container.
+</ParamField>
+
+<ResponseField name="returns" type="T">
+  The resolved service instance of type T.
+</ResponseField>
+
+<Warning>
+  Throws an `Exception` if the container is not initialized. Always call `Modular.initialize()` first, typically through `nestFrogMiddleware()`.
+</Warning>
+
+**Example:**
+
+```dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../services/user_service.dart';
+
+Response onRequest(RequestContext context) {
+  // Direct container access
+  final userService = Modular.get<UserService>();
+  
+  final users = userService.getAllUsers();
+  
+  return Response.json(
+    body: users.map((u) => u.toJson()).toList(),
+  );
+}
+```
+
+#### of()
+
+Creates a `ModularContext` wrapper for accessing services from the request context.
+
+```dart
+static ModularContext of(RequestContext context)
+```
+
+<ParamField path="context" type="RequestContext" required>
+  The Dart Frog request context to wrap.
+</ParamField>
+
+<ResponseField name="returns" type="ModularContext">
+  A context wrapper that provides service access with automatic fallback to the container.
+</ResponseField>
+
+**Example:**
+
+```dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../services/auth_service.dart';
+import '../services/user_service.dart';
+
+Future<Response> onRequest(RequestContext context) async {
+  // Context-based service access
+  final authService = Modular.of(context).get<AuthService>();
+  final userService = Modular.of(context).get<UserService>();
+  
+  final token = context.request.headers['Authorization'];
+  final user = await authService.validateToken(token);
+  
+  if (user == null) {
+    return Response(statusCode: 401);
+  }
+  
+  final profile = await userService.getUserProfile(user.id);
+  
+  return Response.json(body: profile.toJson());
+}
+```
+
+### Static Properties
+
+#### container
+
+Provides direct access to the underlying `ApplicationContainer` instance.
+
+```dart
+static ApplicationContainer get container
+```
+
+<ResponseField name="returns" type="ApplicationContainer">
+  The initialized application container instance.
+</ResponseField>
+
+<Warning>
+  Throws an `Exception` if the container is not initialized.
+</Warning>
+
+**Example:**
+
+```dart
+// Access container directly for advanced scenarios
+final container = Modular.container;
+final hasService = container.has<MyService>();
+```
+
+#### isInitialized
+
+Checks whether the container has been initialized.
+
+```dart
+static bool get isInitialized
+```
+
+<ResponseField name="returns" type="bool">
+  `true` if the container is initialized, `false` otherwise.
+</ResponseField>
+
+**Example:**
+
+```dart
+if (Modular.isInitialized) {
+  final service = Modular.get<MyService>();
+}
+```
+
+### Testing Methods
+
+#### reset()
+
+Resets the container to its uninitialized state. Primarily used for testing.
+
+```dart
+static Future<void> reset()
+```
+
+<Note>
+  This method is useful in test suites to ensure a clean state between tests.
+</Note>
+
+**Example:**
+
+```dart
+// In your test tearDown
+tearDown(() async {
+  await Modular.reset();
+});
+```
+
+## Class: ModularContext
+
+A context wrapper that provides service access with automatic fallback behavior.
+
+### Methods
+
+#### get\<T\>()
+
+Retrieves a service from the request context, falling back to the container if not found.
+
+```dart
+T get<T extends Object>()
+```
+
+<ParamField path="T" type="Type">
+  The type of service to retrieve.
+</ParamField>
+
+<ResponseField name="returns" type="T">
+  The resolved service instance.
+</ResponseField>
+
+<Note>
+  First attempts to read from `RequestContext`, then falls back to `Modular.get()` if not available in the context.
+</Note>
+
+**Example:**
+
+```dart
+final modularContext = Modular.of(context);
+final service = modularContext.get<UserService>();
+```
+
+#### has\<T\>()
+
+Checks if a service is available in the request context.
+
+```dart
+bool has<T extends Object>()
+```
+
+<ParamField path="T" type="Type">
+  The type of service to check for.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  `true` if the service is available in the context, `false` otherwise.
+</ResponseField>
+
+**Example:**
+
+```dart
+final modularContext = Modular.of(context);
+if (modularContext.has<AuthService>()) {
+  final authService = modularContext.get<AuthService>();
+}
+```
+
+### Properties
+
+#### context
+
+Provides access to the underlying `RequestContext`.
+
+```dart
+RequestContext get context
+```
+
+<ResponseField name="returns" type="RequestContext">
+  The wrapped Dart Frog request context.
+</ResponseField>
+
+**Example:**
+
+```dart
+final modularContext = Modular.of(context);
+final request = modularContext.context.request;
+final headers = request.headers;
+```
+
+## Complete Usage Example
+
+```dart
+// routes/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../modules/app_module.dart';
+
+Handler middleware(Handler handler) {
+  return handler.use(nestFrogMiddleware(AppModule()));
+}
+
+// routes/users/index.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../../services/user_service.dart';
+import '../../services/logger_service.dart';
+
+Future<Response> onRequest(RequestContext context) async {
+  // Get services using Modular.of(context)
+  final userService = Modular.of(context).get<UserService>();
+  final logger = Modular.of(context).get<LoggerService>();
+  
+  try {
+    final users = await userService.findAll();
+    logger.info('Retrieved ${users.length} users');
+    
+    return Response.json(
+      body: {
+        'users': users.map((u) => u.toJson()).toList(),
+      },
+    );
+  } catch (e) {
+    logger.error('Failed to retrieve users: $e');
+    return Response.json(
+      statusCode: 500,
+      body: {'error': 'Internal server error'},
+    );
+  }
+}
+
+// Alternative: Direct access with Modular.get()
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../../services/config_service.dart';
+
+Response onRequest(RequestContext context) {
+  // Direct container access (no context needed)
+  final config = Modular.get<ConfigService>();
+  
+  return Response.json(
+    body: {
+      'version': config.appVersion,
+      'environment': config.environment,
+    },
+  );
+}
+```

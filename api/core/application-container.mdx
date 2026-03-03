@@ -1,0 +1,543 @@
+---
+title: 'ApplicationContainer'
+description: 'Central container for managing modules and dependency injection in Nest Dart applications'
+---
+
+## Overview
+
+The `ApplicationContainer` class is the entry point for Nest Dart applications. It manages module registration, service resolution, and provides a unified interface for accessing services across your application.
+
+**Key Features:**
+- Module registration and initialization
+- Centralized service resolution
+- Automatic dependency ordering
+- Lifecycle management
+- Export control and encapsulation
+- Testing support with reset functionality
+
+## Class Definition
+
+```dart
+class ApplicationContainer
+```
+
+## Constructor
+
+```dart
+ApplicationContainer([GetIt? getIt])
+```
+
+Creates a new application container.
+
+<ParamField path="getIt" type="GetIt" optional>
+  Optional GetIt instance. If not provided, uses `GetIt.instance`.
+</ParamField>
+
+**Example:**
+
+```dart
+// Use default GetIt instance
+final container = ApplicationContainer();
+
+// Use custom GetIt instance (useful for testing)
+final testContainer = ApplicationContainer(GetIt.asNewInstance());
+```
+
+## Properties
+
+### isReady
+
+```dart
+bool get isReady
+```
+
+Check if the container is ready (all modules initialized).
+
+**Returns:** `bool` - `true` if all modules have been initialized, `false` otherwise.
+
+**Example:**
+
+```dart
+final container = ApplicationContainer();
+await container.registerModule(AppModule());
+
+if (container.isReady) {
+  print('Container is ready!');
+}
+```
+
+### modules
+
+```dart
+List<Module> get modules
+```
+
+Get all registered modules as an unmodifiable list.
+
+**Returns:** `List<Module>` - Immutable list of registered modules.
+
+**Example:**
+
+```dart
+final container = ApplicationContainer();
+await container.registerModule(UserModule());
+await container.registerModule(AuthModule());
+
+print('Registered modules: ${container.modules.length}');
+```
+
+### context
+
+```dart
+ModuleContext get context
+```
+
+Get the module context (useful for testing and debugging).
+
+**Returns:** `ModuleContext` - The internal module context tracking imports/exports.
+
+<Note>
+This property is primarily useful for testing and debugging module relationships.
+</Note>
+
+### getIt
+
+```dart
+GetIt get getIt
+```
+
+Get the underlying GetIt instance.
+
+**Returns:** `GetIt` - The wrapped GetIt dependency injection container.
+
+<Warning>
+Direct access to GetIt bypasses module restrictions. Use with caution and prefer the container's `get()` method.
+</Warning>
+
+## Methods
+
+### registerModule
+
+```dart
+Future<void> registerModule(Module module) async
+```
+
+Register a module with the container. This makes the module's exported services available to the application and triggers initialization.
+
+<ParamField path="module" type="Module" required>
+  The module to register with the container.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+**Process:**
+1. Registers the module and all its dependencies
+2. Makes exported services globally available
+3. Calls `onModuleInit` on the module and its dependencies
+4. Marks the container as ready
+
+**Example:**
+
+```dart
+final container = ApplicationContainer();
+
+// Register a single module
+await container.registerModule(UserModule());
+
+// Access exported services
+final userService = container.get<UserService>();
+```
+
+### registerModules
+
+```dart
+Future<void> registerModules(List<Module> modules) async
+```
+
+Register multiple modules at once.
+
+<ParamField path="modules" type="List<Module>" required>
+  List of modules to register.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+**Example:**
+
+```dart
+final container = ApplicationContainer();
+
+await container.registerModules([
+  UserModule(),
+  AuthModule(),
+  DatabaseModule(),
+]);
+```
+
+### get
+
+```dart
+T get<T extends Object>({String? instanceName})
+```
+
+Get a service instance from the container. Services are only accessible if they are exported by registered modules.
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Optional named instance identifier.
+</ParamField>
+
+**Returns:** `T` - The requested service instance.
+
+**Throws:** `ServiceNotExportedException` if the service is not accessible.
+
+**Example:**
+
+```dart
+// Get a service by type
+final userService = container.get<UserService>();
+
+// Get a named instance
+final primaryDb = container.get<Database>(instanceName: 'primary');
+final secondaryDb = container.get<Database>(instanceName: 'secondary');
+```
+
+### getWithParams
+
+```dart
+T getWithParams<T extends Object>(dynamic param1, [dynamic param2])
+```
+
+Get a service instance with runtime parameters (for factories registered with parameters).
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve.
+</ParamField>
+
+<ParamField path="param1" type="dynamic" required>
+  First parameter to pass to the factory.
+</ParamField>
+
+<ParamField path="param2" type="dynamic" optional>
+  Optional second parameter to pass to the factory.
+</ParamField>
+
+**Returns:** `T` - The requested service instance.
+
+**Throws:** `ServiceNotExportedException` if the service is not accessible.
+
+**Example:**
+
+```dart
+// Register factory with params in module
+locator.registerFactoryParam<UserLogger, String, LogLevel>(
+  (userId, logLevel) => UserLogger(userId, logLevel),
+);
+
+// Get instance with params
+final logger = container.getWithParams<UserLogger>('user123', LogLevel.info);
+```
+
+### getAsync
+
+```dart
+Future<T> getAsync<T extends Object>({String? instanceName})
+```
+
+Get an asynchronously initialized service instance.
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Optional named instance identifier.
+</ParamField>
+
+**Returns:** `Future<T>` - The requested service instance.
+
+**Throws:** `ServiceNotExportedException` if the service is not accessible.
+
+**Example:**
+
+```dart
+// Register async singleton in module
+locator.registerSingletonAsync<Database>(
+  () async {
+    final db = Database();
+    await db.connect();
+    return db;
+  }
+);
+
+// Get async service
+final database = await container.getAsync<Database>();
+```
+
+### isRegistered
+
+```dart
+bool isRegistered<T extends Object>({String? instanceName})
+```
+
+Check if a service is registered and accessible from the application container.
+
+<ParamField path="T" type="Type" required>
+  The type of service to check.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Optional named instance identifier.
+</ParamField>
+
+**Returns:** `bool` - `true` if the service is registered and accessible.
+
+**Example:**
+
+```dart
+if (container.isRegistered<UserService>()) {
+  final service = container.get<UserService>();
+}
+```
+
+### isRegisteredInContainer
+
+```dart
+bool isRegisteredInContainer<T extends Object>({String? instanceName})
+```
+
+Check if a service is registered in the underlying container, ignoring export restrictions.
+
+<ParamField path="T" type="Type" required>
+  The type of service to check.
+</ParamField>
+
+<ParamField path="instanceName" type="String" optional>
+  Optional named instance identifier.
+</ParamField>
+
+**Returns:** `bool` - `true` if the service is registered (even if not accessible).
+
+<Note>
+This method checks for registration regardless of export status. Use `isRegistered()` to check if a service is accessible.
+</Note>
+
+### getAvailableServices
+
+```dart
+Set<Type> getAvailableServices()
+```
+
+Get all services available to the root container.
+
+**Returns:** `Set<Type>` - Set of all accessible service types.
+
+**Example:**
+
+```dart
+final services = container.getAvailableServices();
+print('Available services: ${services.map((t) => t.toString()).join(", ")}');
+```
+
+### waitUntilReady
+
+```dart
+Future<void> waitUntilReady({Duration? timeout})
+```
+
+Wait for the container to be ready (all modules initialized).
+
+<ParamField path="timeout" type="Duration" optional>
+  Optional timeout duration. Throws `TimeoutException` if exceeded.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+**Throws:** `TimeoutException` if initialization exceeds the timeout.
+
+**Example:**
+
+```dart
+final container = ApplicationContainer();
+
+// Start registration in background
+container.registerModule(AppModule()).ignore();
+
+// Wait for completion with timeout
+await container.waitUntilReady(
+  timeout: Duration(seconds: 30),
+);
+
+print('Container ready!');
+```
+
+### allReady
+
+```dart
+Future<void> allReady({
+  Duration? timeout,
+  bool ignorePendingAsyncCreation = false,
+})
+```
+
+Wait for all services to be ready (delegates to GetIt's allReady method).
+
+<ParamField path="timeout" type="Duration" optional>
+  Optional timeout duration.
+</ParamField>
+
+<ParamField path="ignorePendingAsyncCreation" type="bool" default="false">
+  Whether to ignore pending async service creation.
+</ParamField>
+
+**Returns:** `Future<void>`
+
+**Example:**
+
+```dart
+await container.registerModule(AppModule());
+await container.allReady(timeout: Duration(seconds: 10));
+print('All services ready!');
+```
+
+### reset
+
+```dart
+Future<void> reset() async
+```
+
+Reset the container, destroying all modules and clearing all registrations. Useful for testing.
+
+**Returns:** `Future<void>`
+
+**Process:**
+1. Calls `onModuleDestroy` on all modules in reverse initialization order
+2. Resets the underlying GetIt container
+3. Clears all module registrations
+4. Clears module context
+5. Marks container as not ready
+
+**Example:**
+
+```dart
+test('user service test', () async {
+  final container = ApplicationContainer();
+  await container.registerModule(UserModule());
+  
+  // Run tests...
+  
+  // Clean up
+  await container.reset();
+});
+```
+
+<Warning>
+Resetting the container will dispose all singleton instances. Make sure to properly handle cleanup in your module's `onModuleDestroy` method.
+</Warning>
+
+## Complete Example
+
+```dart
+import 'package:nest_core/core.dart';
+
+// Define modules
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<Database>(Database());
+  }
+  
+  @override
+  List<Type> get exports => [Database];
+}
+
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<UserRepository>(
+      () => UserRepository(locator.get<Database>()),
+    );
+    locator.registerLazySingleton<UserService>(
+      () => UserService(locator.get<UserRepository>()),
+    );
+  }
+  
+  @override
+  List<Type> get exports => [UserService];
+}
+
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [UserModule()];
+}
+
+// Application entry point
+void main() async {
+  // Create container
+  final container = ApplicationContainer();
+  
+  // Register root module (imports UserModule -> DatabaseModule)
+  await container.registerModule(AppModule());
+  
+  // Wait for all services to be ready
+  await container.allReady();
+  
+  print('Container initialized in ${container.isReady}');
+  print('Available services: ${container.getAvailableServices()}');
+  
+  // Access services
+  final userService = container.get<UserService>();
+  final users = await userService.getAllUsers();
+  
+  print('Loaded ${users.length} users');
+}
+```
+
+## Testing Example
+
+```dart
+import 'package:test/test.dart';
+import 'package:nest_core/core.dart';
+
+void main() {
+  late ApplicationContainer container;
+  
+  setUp(() async {
+    // Create fresh container for each test
+    container = ApplicationContainer(GetIt.asNewInstance());
+    await container.registerModule(AppModule());
+  });
+  
+  tearDown(() async {
+    // Clean up after each test
+    await container.reset();
+  });
+  
+  test('should access user service', () async {
+    final userService = container.get<UserService>();
+    expect(userService, isNotNull);
+  });
+  
+  test('should throw when accessing non-exported service', () {
+    expect(
+      () => container.get<UserRepository>(),
+      throwsA(isA<ServiceNotExportedException>()),
+    );
+  });
+}
+```
+
+## Best Practices
+
+1. **Single container instance**: Create one container per application
+2. **Register at startup**: Register all modules during application initialization
+3. **Wait for ready**: Use `waitUntilReady()` before accessing services
+4. **Use isolated containers for tests**: Create new GetIt instances for each test
+5. **Reset in tearDown**: Always reset the container in test tearDown
+6. **Prefer get&lt;T&gt;()**: Use the container's `get()` method instead of accessing GetIt directly

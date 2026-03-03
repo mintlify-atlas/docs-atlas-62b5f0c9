@@ -1,0 +1,355 @@
+---
+title: "nestFrogMiddleware"
+description: "Middleware function for integrating Nest dependency injection with Dart Frog applications"
+---
+
+## Overview
+
+The `nestFrogMiddleware()` function creates a Dart Frog middleware that initializes the Nest dependency injection container and makes services available throughout your application.
+
+## Function Signature
+
+```dart
+Middleware nestFrogMiddleware(Module appModule)
+```
+
+## Parameters
+
+<ParamField path="appModule" type="Module" required>
+  The root application module that defines all service providers, imports, and exports for your application.
+</ParamField>
+
+## Returns
+
+<ResponseField name="returns" type="Middleware">
+  A Dart Frog middleware function that initializes the container on first request and ensures dependency injection is available to all route handlers.
+</ResponseField>
+
+## How It Works
+
+1. **Lazy Initialization**: The middleware checks if `Modular.isInitialized` is `false` on each request
+2. **Container Setup**: On the first request, it calls `Modular.initialize(appModule)` to set up the dependency injection container
+3. **Request Handling**: Passes the request to the next handler after ensuring the container is ready
+4. **Service Availability**: All services registered in the module become available via `Modular.get<T>()` or `Modular.of(context).get<T>()`
+
+<Note>
+  The container is initialized only once, even across multiple requests. Subsequent requests skip initialization and proceed directly to the handler.
+</Note>
+
+## Basic Usage
+
+### Step 1: Create Your Application Module
+
+```dart
+// lib/modules/app_module.dart
+import 'package:nest_core/nest_core.dart';
+import '../services/user_service.dart';
+import '../services/database_service.dart';
+import '../repositories/user_repository.dart';
+
+@Module(
+  providers: [
+    Provider(DatabaseService),
+    Provider(UserRepository),
+    Provider(UserService),
+  ],
+)
+class AppModule {}
+```
+
+### Step 2: Add Middleware to Your Routes
+
+```dart
+// routes/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../modules/app_module.dart';
+
+Handler middleware(Handler handler) {
+  return handler.use(nestFrogMiddleware(AppModule()));
+}
+```
+
+### Step 3: Access Services in Route Handlers
+
+```dart
+// routes/users/index.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../../services/user_service.dart';
+
+Future<Response> onRequest(RequestContext context) async {
+  // Access services through Modular
+  final userService = Modular.get<UserService>();
+  
+  final users = await userService.getAllUsers();
+  
+  return Response.json(
+    body: users.map((u) => u.toJson()).toList(),
+  );
+}
+```
+
+## Advanced Usage
+
+### Multiple Module Imports
+
+```dart
+// lib/modules/database_module.dart
+import 'package:nest_core/nest_core.dart';
+import '../services/database_service.dart';
+
+@Module(
+  providers: [
+    Provider(DatabaseService),
+  ],
+  exports: [DatabaseService],
+)
+class DatabaseModule {}
+
+// lib/modules/user_module.dart
+import 'package:nest_core/nest_core.dart';
+import 'database_module.dart';
+import '../services/user_service.dart';
+import '../repositories/user_repository.dart';
+
+@Module(
+  imports: [DatabaseModule()],
+  providers: [
+    Provider(UserRepository),
+    Provider(UserService),
+  ],
+  exports: [UserService],
+)
+class UserModule {}
+
+// lib/modules/app_module.dart
+import 'package:nest_core/nest_core.dart';
+import 'database_module.dart';
+import 'user_module.dart';
+import 'auth_module.dart';
+
+@Module(
+  imports: [
+    DatabaseModule(),
+    UserModule(),
+    AuthModule(),
+  ],
+)
+class AppModule {}
+
+// routes/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../modules/app_module.dart';
+
+Handler middleware(Handler handler) {
+  return handler.use(nestFrogMiddleware(AppModule()));
+}
+```
+
+### Scoped Middleware for Specific Routes
+
+```dart
+// routes/api/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../../modules/api_module.dart';
+
+Handler middleware(Handler handler) {
+  return handler.use(nestFrogMiddleware(ApiModule()));
+}
+```
+
+<Warning>
+  When using multiple middleware instances in different route directories, ensure that only one calls `nestFrogMiddleware()` at the root level. Nested middleware should rely on the already-initialized container.
+</Warning>
+
+### Combining with Other Middleware
+
+```dart
+// routes/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../modules/app_module.dart';
+import '../middleware/logger_middleware.dart';
+import '../middleware/cors_middleware.dart';
+
+Handler middleware(Handler handler) {
+  return handler
+    .use(requestLogger())           // Log all requests
+    .use(corsMiddleware())           // Handle CORS
+    .use(nestFrogMiddleware(AppModule()))  // Initialize DI container
+    .use(authMiddleware());          // Authentication (can now use Modular)
+}
+```
+
+### Using Services in Custom Middleware
+
+```dart
+// lib/middleware/auth_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../services/auth_service.dart';
+
+Middleware authMiddleware() {
+  return (handler) {
+    return (context) async {
+      // Access services after nestFrogMiddleware has initialized
+      final authService = Modular.get<AuthService>();
+      
+      final token = context.request.headers['Authorization'];
+      
+      if (token == null) {
+        return Response(statusCode: 401, body: 'Missing token');
+      }
+      
+      final isValid = await authService.validateToken(token);
+      
+      if (!isValid) {
+        return Response(statusCode: 401, body: 'Invalid token');
+      }
+      
+      return handler(context);
+    };
+  };
+}
+
+// routes/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../modules/app_module.dart';
+import '../middleware/auth_middleware.dart';
+
+Handler middleware(Handler handler) {
+  return handler
+    .use(nestFrogMiddleware(AppModule()))  // Must come before authMiddleware
+    .use(authMiddleware());                 // Can now use Modular.get()
+}
+```
+
+## Complete Example: E-commerce API
+
+```dart
+// lib/modules/app_module.dart
+import 'package:nest_core/nest_core.dart';
+import '../services/database_service.dart';
+import '../services/auth_service.dart';
+import '../services/product_service.dart';
+import '../services/order_service.dart';
+import '../services/payment_service.dart';
+import '../repositories/user_repository.dart';
+import '../repositories/product_repository.dart';
+import '../repositories/order_repository.dart';
+
+@Module(
+  providers: [
+    Provider(DatabaseService),
+    Provider(UserRepository),
+    Provider(ProductRepository),
+    Provider(OrderRepository),
+    Provider(AuthService),
+    Provider(ProductService),
+    Provider(OrderService),
+    Provider(PaymentService),
+  ],
+)
+class AppModule {}
+
+// routes/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../modules/app_module.dart';
+import '../middleware/logger_middleware.dart';
+import '../middleware/cors_middleware.dart';
+
+Handler middleware(Handler handler) {
+  return handler
+    .use(requestLogger())
+    .use(corsMiddleware())
+    .use(nestFrogMiddleware(AppModule()));
+}
+
+// routes/products/index.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../../services/product_service.dart';
+
+Future<Response> onRequest(RequestContext context) async {
+  final productService = Modular.get<ProductService>();
+  
+  switch (context.request.method) {
+    case HttpMethod.get:
+      final products = await productService.getAllProducts();
+      return Response.json(
+        body: products.map((p) => p.toJson()).toList(),
+      );
+    
+    case HttpMethod.post:
+      final body = await context.request.json();
+      final product = await productService.createProduct(body);
+      return Response.json(
+        statusCode: 201,
+        body: product.toJson(),
+      );
+    
+    default:
+      return Response(statusCode: 405);
+  }
+}
+
+// routes/orders/index.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+import '../../services/order_service.dart';
+import '../../services/payment_service.dart';
+
+Future<Response> onRequest(RequestContext context) async {
+  // Access multiple services
+  final orderService = Modular.of(context).get<OrderService>();
+  final paymentService = Modular.of(context).get<PaymentService>();
+  
+  final body = await context.request.json();
+  
+  // Create order
+  final order = await orderService.createOrder(
+    userId: body['userId'],
+    items: body['items'],
+  );
+  
+  // Process payment
+  final payment = await paymentService.processPayment(
+    orderId: order.id,
+    amount: order.total,
+    paymentMethod: body['paymentMethod'],
+  );
+  
+  return Response.json(
+    statusCode: 201,
+    body: {
+      'order': order.toJson(),
+      'payment': payment.toJson(),
+    },
+  );
+}
+```
+
+## Best Practices
+
+<Note>
+  **Initialization Order**: Always place `nestFrogMiddleware()` before any custom middleware that depends on services from the container.
+</Note>
+
+<Note>
+  **Single Initialization**: Only use `nestFrogMiddleware()` once at the root `_middleware.dart` level to avoid redundant initialization checks.
+</Note>
+
+<Warning>
+  **Module Organization**: Keep your modules organized and use imports/exports to manage dependencies between modules rather than registering everything in a single module.
+</Warning>
+
+## See Also
+
+- [Modular Class](/api/frog/modular) - Service access and container management
+- [Module Configuration](/core/module) - How to configure modules
+- [Providers](/core/providers) - Registering services in modules

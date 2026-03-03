@@ -1,0 +1,485 @@
+---
+title: "Modular"
+description: "Static API for accessing services and router configuration in Nest Flutter applications"
+---
+
+## Overview
+
+The `Modular` class provides a clean, static API for accessing dependency injection services and router configuration throughout your Flutter application. It offers a similar API to Flutter Modular but is built on Nest's powerful DI container.
+
+<Warning>
+  All `Modular` static methods require `ModularApp` to be initialized first. Calling these methods before initialization will throw a `FlutterError`.
+</Warning>
+
+## Service Resolution Methods
+
+### get&lt;T&gt;()
+
+Retrieve a service instance from the global container.
+
+```dart
+static T get<T extends Object>({String? instanceName})
+```
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve. Must be registered in a module.
+</ParamField>
+
+<ParamField path="instanceName" type="String">
+  Optional named instance identifier. Use when you have multiple instances of the same type registered with different names.
+</ParamField>
+
+<ResponseField name="returns" type="T">
+  The resolved service instance.
+</ResponseField>
+
+#### Usage Example
+
+```dart
+// Get a service
+final userService = Modular.get<UserService>();
+final user = await userService.getCurrentUser();
+
+// Get a named instance
+final primaryDb = Modular.get<Database>(instanceName: 'primary');
+final cacheDb = Modular.get<Database>(instanceName: 'cache');
+```
+
+#### Usage in Widgets
+
+```dart
+class UserProfileScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final authService = Modular.get<AuthService>();
+    final userRepo = Modular.get<UserRepository>();
+    
+    return FutureBuilder(
+      future: userRepo.getUserProfile(authService.currentUserId),
+      builder: (context, snapshot) {
+        // Build UI
+      },
+    );
+  }
+}
+```
+
+---
+
+### getWithParams&lt;T&gt;()
+
+Retrieve a service instance that requires parameters for construction.
+
+```dart
+static T getWithParams<T extends Object>(dynamic param1, [dynamic param2])
+```
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve.
+</ParamField>
+
+<ParamField path="param1" type="dynamic" required>
+  First parameter to pass to the factory function.
+</ParamField>
+
+<ParamField path="param2" type="dynamic">
+  Optional second parameter to pass to the factory function.
+</ParamField>
+
+<ResponseField name="returns" type="T">
+  The resolved service instance created with the provided parameters.
+</ResponseField>
+
+#### Usage Example
+
+```dart
+// In your module
+class AppModule extends Module {
+  @override
+  List<Provider> get providers => [
+    Provider.factory<UserRepository>(
+      (userId, tenantId) => UserRepository(userId, tenantId),
+    ),
+  ];
+}
+
+// Using getWithParams
+final userRepo = Modular.getWithParams<UserRepository>(
+  'user123',
+  'tenant456',
+);
+```
+
+---
+
+### getAsync&lt;T&gt;()
+
+Retrieve an asynchronously initialized service instance.
+
+```dart
+static Future<T> getAsync<T extends Object>({String? instanceName})
+```
+
+<ParamField path="T" type="Type" required>
+  The type of service to retrieve.
+</ParamField>
+
+<ParamField path="instanceName" type="String">
+  Optional named instance identifier.
+</ParamField>
+
+<ResponseField name="returns" type="Future<T>">
+  A future that completes with the resolved service instance.
+</ResponseField>
+
+#### Usage Example
+
+```dart
+// In your module - register async service
+class AppModule extends Module {
+  @override
+  List<Provider> get providers => [
+    Provider.asyncSingleton<Database>(
+      () async => await Database.initialize(),
+    ),
+  ];
+}
+
+// Using getAsync
+final database = await Modular.getAsync<Database>();
+final users = await database.query('users');
+```
+
+---
+
+### isRegistered&lt;T&gt;()
+
+Check if a service type is registered in the container.
+
+```dart
+static bool isRegistered<T extends Object>({String? instanceName})
+```
+
+<ParamField path="T" type="Type" required>
+  The type of service to check.
+</ParamField>
+
+<ParamField path="instanceName" type="String">
+  Optional named instance identifier.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  `true` if the service is registered, `false` otherwise.
+</ResponseField>
+
+#### Usage Example
+
+```dart
+if (Modular.isRegistered<AuthService>()) {
+  final auth = Modular.get<AuthService>();
+  // Use auth service
+} else {
+  // Handle missing service
+  print('AuthService not registered');
+}
+
+// Check named instances
+if (Modular.isRegistered<Database>(instanceName: 'cache')) {
+  final cacheDb = Modular.get<Database>(instanceName: 'cache');
+}
+```
+
+---
+
+### getAvailableServices()
+
+Get a set of all registered service types.
+
+```dart
+static Set<Type> getAvailableServices()
+```
+
+<ResponseField name="returns" type="Set<Type>">
+  A set containing all registered service types.
+</ResponseField>
+
+#### Usage Example
+
+```dart
+final services = Modular.getAvailableServices();
+for (final serviceType in services) {
+  print('Available: $serviceType');
+}
+
+// Check if specific service exists
+if (services.contains(UserService)) {
+  final userService = Modular.get<UserService>();
+}
+```
+
+## Context-Based Methods
+
+### of()
+
+Get the `ApplicationContainerNotifier` from a `BuildContext`. This provides reactive access to the container.
+
+```dart
+static ApplicationContainerNotifier of(BuildContext context)
+```
+
+<ParamField path="context" type="BuildContext" required>
+  The build context to search for the container provider.
+</ParamField>
+
+<ResponseField name="returns" type="ApplicationContainerNotifier">
+  The container notifier from the widget tree.
+</ResponseField>
+
+<Warning>
+  Throws `FlutterError` if no `ApplicationContainerProvider` is found in the widget tree.
+</Warning>
+
+#### Usage Example
+
+```dart
+class MyWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final containerNotifier = Modular.of(context);
+    
+    // Access services
+    final userService = containerNotifier.get<UserService>();
+    
+    return ListenableBuilder(
+      listenable: containerNotifier,
+      builder: (context, child) {
+        // Rebuild when container changes
+        return Text('Services: ${containerNotifier.getAvailableServices().length}');
+      },
+    );
+  }
+}
+```
+
+---
+
+### containerOf()
+
+Get the raw `ApplicationContainer` from a `BuildContext`.
+
+```dart
+static ApplicationContainer containerOf(BuildContext context)
+```
+
+<ParamField path="context" type="BuildContext" required>
+  The build context to search for the container.
+</ParamField>
+
+<ResponseField name="returns" type="ApplicationContainer">
+  The raw container instance.
+</ResponseField>
+
+#### Usage Example
+
+```dart
+class DebugPanel extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final container = Modular.containerOf(context);
+    final modules = container.modules;
+    
+    return Column(
+      children: [
+        Text('Registered Modules: ${modules.length}'),
+        for (final module in modules)
+          Text('- ${module.runtimeType}'),
+      ],
+    );
+  }
+}
+```
+
+## Router Configuration
+
+### router()
+
+Create and configure a `GoRouter` instance from the root module's routes.
+
+```dart
+static GoRouter router(
+  GoRouter Function(GoRouter router) configurator, {
+  Module? rootModule,
+  bool forceRecreate = false,
+})
+```
+
+<ParamField path="configurator" type="Function" required>
+  A callback function that receives the base router and returns a configured router. Use this to customize router settings.
+  
+  ```dart
+  Modular.router((router) {
+    return GoRouter(
+      routes: router.routes,
+      initialLocation: '/home',
+      debugLogDiagnostics: true,
+      redirect: (context, state) {
+        // Custom redirect logic
+      },
+    );
+  })
+  ```
+</ParamField>
+
+<ParamField path="rootModule" type="Module">
+  Optional root module. If not provided, uses the module from `ModularApp`.
+</ParamField>
+
+<ParamField path="forceRecreate" type="bool" default="false">
+  Force recreation of the router even if a cached version exists. Useful when routes change dynamically.
+</ParamField>
+
+<ResponseField name="returns" type="GoRouter">
+  The configured GoRouter instance.
+</ResponseField>
+
+<Note>
+  The router is cached by default to prevent recreation during hot reloads. Use `forceRecreate: true` or `clearRouterCache()` to regenerate routes.
+</Note>
+
+#### Usage Example
+
+```dart
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp.router(
+      title: 'My App',
+      routerConfig: Modular.router(
+        (router) => GoRouter(
+          routes: router.routes,
+          initialLocation: '/splash',
+          debugLogDiagnostics: kDebugMode,
+          redirect: (context, state) {
+            final authService = Modular.get<AuthService>();
+            final isLoggedIn = authService.isAuthenticated;
+            
+            if (!isLoggedIn && state.location != '/login') {
+              return '/login';
+            }
+            return null;
+          },
+          errorBuilder: (context, state) => ErrorScreen(state.error),
+        ),
+      ),
+    );
+  }
+}
+```
+
+---
+
+### clearRouterCache()
+
+Clear the cached router instance, forcing recreation on next `router()` call.
+
+```dart
+static void clearRouterCache()
+```
+
+#### Usage Example
+
+```dart
+// After dynamically updating routes
+Modular.clearRouterCache();
+
+// Next router() call will recreate the router with new routes
+final newRouter = Modular.router((router) => router);
+```
+
+---
+
+### cachedRouter
+
+Get the currently cached router instance (for debugging).
+
+```dart
+static GoRouter? get cachedRouter
+```
+
+<ResponseField name="returns" type="GoRouter?">
+  The cached router instance, or `null` if no router is cached.
+</ResponseField>
+
+---
+
+### isRouterCached
+
+Check if a router is currently cached.
+
+```dart
+static bool get isRouterCached
+```
+
+<ResponseField name="returns" type="bool">
+  `true` if a router is cached, `false` otherwise.
+</ResponseField>
+
+---
+
+### rootModule
+
+Get the current root module.
+
+```dart
+static Module? get rootModule
+```
+
+<ResponseField name="returns" type="Module?">
+  The root module instance, or `null` if not initialized.
+</ResponseField>
+
+## Error Handling
+
+### Initialization Errors
+
+```dart
+try {
+  final service = Modular.get<MyService>();
+} catch (e) {
+  if (e is FlutterError) {
+    // Handle: ModularApp not initialized
+    print('Make sure ModularApp is initialized');
+  }
+}
+```
+
+### Service Not Found
+
+```dart
+try {
+  final service = Modular.get<UnregisteredService>();
+} catch (e) {
+  // Handle: Service not registered in any module
+  print('Service not found: $e');
+}
+```
+
+## Best Practices
+
+<Note>
+  **Use `Modular.of(context)` for reactive updates**: When you need to rebuild widgets based on container changes, use `of()` instead of static `get()`.
+</Note>
+
+<Note>
+  **Cache router in production**: The default router caching prevents unnecessary recreations during hot reloads, improving development experience.
+</Note>
+
+<Warning>
+  **Don't call `get&lt;T&gt;()` in widget constructors**: Widget constructors can be called before `ModularApp` is initialized. Instead, call it in `build()` or `initState()`.
+</Warning>
+
+## See Also
+
+- [ModularApp](/api/flutter/modular-app) - Root widget initialization
+- [Module Class](/api/flutter/module) - Creating modules
+- [Routing](/api/flutter/routing) - Route configuration

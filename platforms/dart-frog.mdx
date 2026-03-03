@@ -1,0 +1,463 @@
+---
+title: Dart Frog Integration
+description: Build modular backend APIs with Nest Dart and Dart Frog
+---
+
+# Dart Frog Integration
+
+The `nest_frog` package brings Nest Dart's modular architecture to Dart Frog, enabling clean, maintainable backend applications with powerful dependency injection.
+
+## Installation
+
+Add the dependency to your `pubspec.yaml`:
+
+```yaml
+dependencies:
+  nest_frog: ^latest
+  dart_frog: ^latest
+```
+
+## Quick Start
+
+<Steps>
+  <Step title="Create Your Modules">
+    Define modules for different parts of your application:
+
+    ```dart
+    import 'package:nest_core/nest_core.dart';
+
+    class UserModule extends Module {
+      @override
+      List<Module> get imports => [CoreModule()];
+
+      @override
+      Future<void> providers(Locator locator) async {
+        locator.registerSingleton<UserService>(
+          UserService(locator.get<Database>()),
+        );
+      }
+
+      @override
+      List<Type> get exports => [UserService];
+    }
+
+    class CoreModule extends Module {
+      @override
+      Future<void> providers(Locator locator) async {
+        locator.registerSingleton<LoggerService>(LoggerService());
+        locator.registerSingleton<Database>(Database());
+      }
+
+      @override
+      List<Type> get exports => [LoggerService, Database];
+    }
+    ```
+  </Step>
+
+  <Step title="Create App Module">
+    Create a root module that imports all feature modules:
+
+    ```dart
+    import 'package:nest_core/nest_core.dart';
+
+    class AppModule extends Module {
+      @override
+      List<Module> get imports => [
+        DatabaseModule(),
+        CoreModule(),
+        UserModule(),
+      ];
+
+      @override
+      Future<void> providers(Locator locator) async {}
+    }
+    ```
+  </Step>
+
+  <Step title="Setup Middleware">
+    Add the Nest Frog middleware in `routes/_middleware.dart`:
+
+    ```dart
+    import 'package:dart_frog/dart_frog.dart';
+    import 'package:nest_frog/nest_frog.dart';
+    import 'package:your_app/app_module.dart';
+
+    Handler middleware(Handler handler) {
+      return handler.use(nestFrogMiddleware(AppModule()));
+    }
+    ```
+  </Step>
+
+  <Step title="Use Services in Route Handlers">
+    Access your services in route handlers:
+
+    ```dart
+    import 'package:dart_frog/dart_frog.dart';
+    import 'package:nest_frog/nest_frog.dart';
+
+    Future<Response> onRequest(RequestContext context) async {
+      final modular = Modular.of(context);
+      final userService = modular.get<UserService>();
+      final logger = modular.get<LoggerService>();
+
+      logger.log('Users route accessed');
+
+      final users = userService.getAllUsers();
+      return Response.json(body: {'users': users});
+    }
+    ```
+  </Step>
+</Steps>
+
+## Modular API
+
+The `Modular` class provides unified access to your dependency injection container.
+
+### Initialize Container
+
+Initialize the application container with your root module:
+
+```dart
+import 'package:nest_frog/nest_frog.dart';
+
+Handler middleware(Handler handler) {
+  if (!Modular.isInitialized) {
+    Modular.initialize(AppModule());
+  }
+
+  return handler.use(nestFrogMiddleware(AppModule()));
+}
+```
+
+<Note>
+  The middleware automatically calls `Modular.initialize()` if not already initialized, but you can also do it manually for more control.
+</Note>
+
+### Access Services
+
+There are two ways to access services:
+
+<CodeGroup>
+
+```dart Context-based (Recommended)
+final modular = Modular.of(context);
+final userService = modular.get<UserService>();
+final logger = modular.get<LoggerService>();
+```
+
+```dart Direct Access
+final userService = Modular.get<UserService>();
+final logger = Modular.get<LoggerService>();
+```
+
+</CodeGroup>
+
+<Tip>
+  The context-based approach (`Modular.of(context)`) is recommended as it integrates with Dart Frog's request context and can utilize context-specific providers.
+</Tip>
+
+## Middleware Setup
+
+The `nestFrogMiddleware` function creates a middleware that initializes and provides access to your dependency injection container.
+
+```dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+Handler middleware(Handler handler) {
+  return handler
+      .use(nestFrogMiddleware(AppModule()))
+      .use(provider<String>((context) => 'Welcome Message'));
+}
+```
+
+### How It Works
+
+1. Checks if the container is initialized
+2. If not, calls `Modular.initialize()` with your app module
+3. Waits for all services to be ready
+4. Makes services available to route handlers
+
+## Route Handlers
+
+Access services in your route handlers using the `Modular.of(context)` API:
+
+### GET Request Example
+
+```dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+Future<Response> onRequest(RequestContext context) async {
+  final modular = Modular.of(context);
+  final userService = modular.get<UserService>();
+  final logger = modular.get<LoggerService>();
+
+  logger.log('Users route accessed');
+
+  switch (context.request.method) {
+    case HttpMethod.get:
+      return _getUsers(userService);
+    case HttpMethod.post:
+      return await _createUser(context, userService);
+    default:
+      return Response(statusCode: 405, body: 'Method not allowed');
+  }
+}
+
+Response _getUsers(UserService userService) {
+  final users = userService.getAllUsers();
+
+  return Response.json(
+    body: {
+      'users': users.map((user) => user.toJson()).toList(),
+      'count': users.length,
+      'timestamp': DateTime.now().toIso8601String(),
+    },
+  );
+}
+```
+
+### POST Request Example
+
+```dart
+Future<Response> _createUser(
+  RequestContext context,
+  UserService userService,
+) async {
+  try {
+    final body = await context.request.json() as Map<String, dynamic>;
+    final name = body['name'] as String?;
+    final email = body['email'] as String?;
+
+    if (name == null || email == null) {
+      return Response.json(
+        statusCode: 400,
+        body: {
+          'error': 'Missing required fields',
+          'message': 'Both name and email are required',
+        },
+      );
+    }
+
+    final user = userService.createUser(name, email);
+    return Response.json(
+      statusCode: 201,
+      body: {
+        'message': 'User created successfully',
+        'user': user.toJson(),
+        'timestamp': DateTime.now().toIso8601String(),
+      },
+    );
+  } catch (e) {
+    return Response.json(
+      statusCode: 400,
+      body: {
+        'error': 'Invalid request body',
+        'message': 'Request body must be valid JSON',
+      },
+    );
+  }
+}
+```
+
+### Dynamic Routes
+
+Access path parameters in dynamic routes:
+
+```dart
+// routes/users/[id].dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+Future<Response> onRequest(RequestContext context, String id) async {
+  final modular = Modular.of(context);
+  final userService = modular.get<UserService>();
+
+  final userId = int.tryParse(id);
+  if (userId == null) {
+    return Response.json(
+      statusCode: 400,
+      body: {'error': 'Invalid user ID'},
+    );
+  }
+
+  final user = userService.getUserById(userId);
+  if (user == null) {
+    return Response.json(
+      statusCode: 404,
+      body: {'error': 'User not found'},
+    );
+  }
+
+  return Response.json(body: user.toJson());
+}
+```
+
+## Complete Example
+
+Here's a complete example of a Dart Frog application with Nest Dart:
+
+<CodeGroup>
+
+```dart routes/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog_backend/app_module.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+Handler middleware(Handler handler) {
+  if (!Modular.isInitialized) {
+    Modular.initialize(AppModule());
+  }
+
+  return handler.use(nestFrogMiddleware(AppModule()));
+}
+```
+
+```dart lib/app_module.dart
+import 'package:nest_core/nest_core.dart';
+import 'database/database_module.dart';
+import 'modules/core_module.dart';
+import 'modules/user_module.dart';
+
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    DatabaseModule(),
+    CoreModule(),
+    UserModule(),
+  ];
+
+  @override
+  Future<void> providers(Locator locator) async {}
+}
+```
+
+```dart routes/users/index.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog_backend/modules/core_module.dart';
+import 'package:nest_frog_backend/modules/user_module.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+Future<Response> onRequest(RequestContext context) async {
+  final modular = Modular.of(context);
+  final userService = modular.get<UserService>();
+  final logger = modular.get<LoggerService>();
+
+  logger.log('Users route accessed');
+
+  switch (context.request.method) {
+    case HttpMethod.get:
+      return _getUsers(userService);
+    case HttpMethod.post:
+      return await _createUser(context, userService);
+    default:
+      return Response(statusCode: 405, body: 'Method not allowed');
+  }
+}
+
+Response _getUsers(UserService userService) {
+  final users = userService.getAllUsers();
+
+  return Response.json(
+    body: {
+      'users': users.map((user) => user.toJson()).toList(),
+      'count': users.length,
+    },
+  );
+}
+
+Future<Response> _createUser(
+  RequestContext context,
+  UserService userService,
+) async {
+  final body = await context.request.json() as Map<String, dynamic>;
+  final name = body['name'] as String;
+  final email = body['email'] as String;
+
+  final user = userService.createUser(name, email);
+  return Response.json(
+    statusCode: 201,
+    body: {'user': user.toJson()},
+  );
+}
+```
+
+</CodeGroup>
+
+## Testing
+
+Reset the container between tests:
+
+```dart
+import 'package:nest_frog/nest_frog.dart';
+import 'package:test/test.dart';
+
+void main() {
+  setUp(() async {
+    await Modular.reset();
+    await Modular.initialize(AppModule());
+  });
+
+  tearDown(() async {
+    await Modular.reset();
+  });
+
+  test('user service returns users', () async {
+    final userService = Modular.get<UserService>();
+    final users = userService.getAllUsers();
+    expect(users, isNotEmpty);
+  });
+}
+```
+
+## Container Status
+
+Check the container initialization status:
+
+```dart
+// Check if initialized
+if (Modular.isInitialized) {
+  print('Container is ready');
+}
+
+// Wait for container to be ready
+await Modular.container.waitUntilReady();
+
+// Check if specific service is ready
+final isReady = Modular.container.isReady;
+```
+
+## Best Practices
+
+<Tip>
+  - Initialize the container once in your root middleware
+  - Use `Modular.of(context)` for accessing services in route handlers
+  - Organize related services into feature modules
+  - Export only the services that other modules need
+  - Reset the container in tests for isolation
+</Tip>
+
+## Advanced: Direct Container Access
+
+For advanced use cases, you can access the underlying container:
+
+```dart
+import 'package:nest_frog/nest_frog.dart';
+
+// Get the container instance
+final container = Modular.container;
+
+// Wait until all services are ready
+await container.waitUntilReady();
+
+// Get available services
+final services = container.getAvailableServices();
+print('Available services: $services');
+```
+
+## See Also
+
+- [Core Concepts](/core/modules/modules) - Learn about the module system
+- [Dependency Injection](/core/modules/dependency-injection) - Understand the DI container
+- [Flutter Integration](/platforms/flutter) - Frontend integration

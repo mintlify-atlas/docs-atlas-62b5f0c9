@@ -1,0 +1,422 @@
+---
+title: 'ModuleContext'
+description: 'Tracks module dependencies, exports, and service access permissions in Nest Dart'
+---
+
+## Overview
+
+The `ModuleContext` class manages the relationships between modules, tracking which services are exported, imported, and globally available. It enforces encapsulation by controlling access to services based on module dependencies.
+
+**Key Features:**
+- Tracks module imports and exports
+- Maps services to their providing modules
+- Enforces access control based on module relationships
+- Manages global service availability
+- Provides visibility into module dependencies
+
+## Class Definition
+
+```dart
+class ModuleContext
+```
+
+<Note>
+`ModuleContext` is primarily used internally by the framework. You typically interact with it through the `ApplicationContainer` or in lifecycle hooks like `onModuleInit` and `onModuleDestroy`.
+</Note>
+
+## Properties
+
+All properties are read-only and provide access to internal module relationship maps.
+
+### moduleExports
+
+```dart
+Map<Type, Set<Type>> get moduleExports
+```
+
+Map of module types to the set of service types they export.
+
+**Returns:** `Map<Type, Set<Type>>` - Module type to exported service types.
+
+**Example:**
+
+```dart
+// In onModuleInit
+Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+  final exports = context.moduleExports[UserModule];
+  print('UserModule exports: $exports');
+}
+```
+
+### moduleImports
+
+```dart
+Map<Type, Set<Type>> get moduleImports
+```
+
+Map of module types to the set of module types they import.
+
+**Returns:** `Map<Type, Set<Type>>` - Module type to imported module types.
+
+**Example:**
+
+```dart
+Final<void> onModuleInit(Locator locator, ModuleContext context) async {
+  final imports = context.moduleImports[UserModule];
+  print('UserModule imports: $imports');
+}
+```
+
+### serviceToModule
+
+```dart
+Map<Type, Type> get serviceToModule
+```
+
+Map of service types to the module type that provides them.
+
+**Returns:** `Map<Type, Type>` - Service type to provider module type.
+
+**Example:**
+
+```dart
+Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+  final provider = context.serviceToModule[UserService];
+  print('UserService is provided by: $provider');
+}
+```
+
+### globalServices
+
+```dart
+Set<Type> get globalServices
+```
+
+Set of service types that are globally available (accessible by all modules).
+
+**Returns:** `Set<Type>` - Globally available service types.
+
+**Example:**
+
+```dart
+Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+  if (context.globalServices.contains(UserService)) {
+    print('UserService is globally available');
+  }
+}
+```
+
+## Methods
+
+### registerModuleExports
+
+```dart
+void registerModuleExports(Type moduleType, List<Type> exports)
+```
+
+Register the services that a module exports.
+
+<ParamField path="moduleType" type="Type" required>
+  The type of the module exporting services.
+</ParamField>
+
+<ParamField path="exports" type="List<Type>" required>
+  List of service types that the module exports.
+</ParamField>
+
+**Returns:** `void`
+
+<Warning>
+This method is called internally by the framework during module registration. You should not call it directly.
+</Warning>
+
+### registerModuleImports
+
+```dart
+void registerModuleImports(Type moduleType, List<Type> imports)
+```
+
+Register the modules that a module imports.
+
+<ParamField path="moduleType" type="Type" required>
+  The type of the module importing other modules.
+</ParamField>
+
+<ParamField path="imports" type="List<Type>" required>
+  List of module types that are imported.
+</ParamField>
+
+**Returns:** `void`
+
+<Warning>
+This method is called internally by the framework. Do not call it directly.
+</Warning>
+
+### registerServiceProvider
+
+```dart
+void registerServiceProvider(Type serviceType, Type moduleType)
+```
+
+Register which module provides a specific service.
+
+<ParamField path="serviceType" type="Type" required>
+  The type of service being registered.
+</ParamField>
+
+<ParamField path="moduleType" type="Type" required>
+  The type of module that provides this service.
+</ParamField>
+
+**Returns:** `void`
+
+<Warning>
+This method is called automatically when services are registered. Do not call it manually.
+</Warning>
+
+### markAsGlobal
+
+```dart
+void markAsGlobal(Type serviceType)
+```
+
+Mark a service as globally available, making it accessible to all modules regardless of import relationships.
+
+<ParamField path="serviceType" type="Type" required>
+  The service type to mark as global.
+</ParamField>
+
+**Returns:** `void`
+
+<Note>
+Services from modules directly registered with `ApplicationContainer` are automatically marked as global.
+</Note>
+
+### canAccess
+
+```dart
+bool canAccess(Type requestingModule, Type serviceType)
+```
+
+Check if a module can access a specific service based on import/export relationships.
+
+<ParamField path="requestingModule" type="Type" required>
+  The module requesting access to the service.
+</ParamField>
+
+<ParamField path="serviceType" type="Type" required>
+  The service type being accessed.
+</ParamField>
+
+**Returns:** `bool` - `true` if the module can access the service.
+
+**Access Rules:**
+1. Global services are always accessible
+2. Services from the requesting module itself are accessible
+3. Services from imported modules are accessible if they are exported
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final canAccessDb = context.canAccess(
+      UserModule,
+      Database,
+    );
+    
+    if (canAccessDb) {
+      print('UserModule can access Database');
+    } else {
+      print('UserModule cannot access Database (not exported)');
+    }
+  }
+}
+```
+
+### getAvailableServices
+
+```dart
+Set<Type> getAvailableServices(Type moduleType)
+```
+
+Get all services available to a specific module.
+
+<ParamField path="moduleType" type="Type" required>
+  The module type to get available services for.
+</ParamField>
+
+**Returns:** `Set<Type>` - All service types accessible by the module.
+
+**Includes:**
+- Global services
+- Services from imported modules that are exported
+- Services from the module itself
+
+**Example:**
+
+```dart
+class UserModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final available = context.getAvailableServices(UserModule);
+    print('Available services: ${available.length}');
+    
+    for (final serviceType in available) {
+      print('  - $serviceType');
+    }
+  }
+}
+```
+
+## Complete Example
+
+```dart
+import 'package:nest_core/core.dart';
+
+// Services
+class Database {}
+class UserRepository {}
+class UserService {}
+class AuthService {}
+
+// Database module
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<Database>(Database());
+  }
+  
+  @override
+  List<Type> get exports => [Database];
+}
+
+// User module
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<UserRepository>(UserRepository());
+    locator.registerSingleton<UserService>(UserService());
+  }
+  
+  @override
+  List<Type> get exports => [UserService];
+  
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    // Inspect module context
+    print('\n=== Module Context Inspection ===');
+    
+    // Check what UserModule exports
+    final exports = context.moduleExports[UserModule];
+    print('UserModule exports: $exports');
+    
+    // Check what UserModule imports
+    final imports = context.moduleImports[UserModule];
+    print('UserModule imports: $imports');
+    
+    // Check which module provides Database
+    final dbProvider = context.serviceToModule[Database];
+    print('Database is provided by: $dbProvider');
+    
+    // Check if UserService is global
+    final isGlobal = context.globalServices.contains(UserService);
+    print('UserService is global: $isGlobal');
+    
+    // Check access permissions
+    final canAccessDb = context.canAccess(UserModule, Database);
+    print('UserModule can access Database: $canAccessDb');
+    
+    final canAccessAuth = context.canAccess(UserModule, AuthService);
+    print('UserModule can access AuthService: $canAccessAuth');
+    
+    // Get all available services
+    final available = context.getAvailableServices(UserModule);
+    print('Available to UserModule: $available');
+  }
+}
+
+// App module
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [UserModule()];
+}
+
+void main() async {
+  final container = ApplicationContainer();
+  await container.registerModule(AppModule());
+  
+  // Access module context from container
+  final context = container.context;
+  
+  print('\n=== Container-level Context ===');
+  print('All registered modules: ${context.moduleImports.keys}');
+  print('All global services: ${context.globalServices}');
+  print('All service providers: ${context.serviceToModule}');
+}
+```
+
+**Output:**
+```
+=== Module Context Inspection ===
+UserModule exports: {UserService}
+UserModule imports: {DatabaseModule}
+Database is provided by: DatabaseModule
+UserService is global: true
+UserModule can access Database: true
+UserModule can access AuthService: false
+Available to UserModule: {Database, UserRepository, UserService}
+
+=== Container-level Context ===
+All registered modules: {ApplicationContainer, UserModule, DatabaseModule}
+All global services: {Database, UserService}
+All service providers: {Database: DatabaseModule, UserRepository: UserModule, UserService: UserModule}
+```
+
+## Debugging Module Issues
+
+Use `ModuleContext` to debug common module-related issues:
+
+```dart
+class DebugModule extends Module {
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    // Debug: Check if a service is exported
+    final serviceType = UserService;
+    final providerModule = context.serviceToModule[serviceType];
+    
+    if (providerModule != null) {
+      final exports = context.moduleExports[providerModule];
+      if (!exports!.contains(serviceType)) {
+        print('WARNING: $serviceType is not exported by $providerModule');
+      }
+    }
+    
+    // Debug: Check import chain
+    final imports = context.moduleImports[DebugModule];
+    print('This module imports: $imports');
+    
+    for (final importedModule in imports ?? <Type>{}) {
+      final importExports = context.moduleExports[importedModule];
+      print('$importedModule exports: $importExports');
+    }
+    
+    // Debug: List all available services
+    final available = context.getAvailableServices(DebugModule);
+    print('Services available to ${DebugModule}: $available');
+  }
+}
+```
+
+## Best Practices
+
+1. **Use in lifecycle hooks**: Access `ModuleContext` in `onModuleInit` for debugging
+2. **Check availability**: Use `canAccess()` to verify service accessibility
+3. **Inspect during development**: Use `getAvailableServices()` to understand module dependencies
+4. **Don't modify directly**: Never modify the context maps directly; use the Module API
+5. **Debug export issues**: Use `moduleExports` to verify services are properly exported
+6. **Trace provider modules**: Use `serviceToModule` to identify which module provides a service

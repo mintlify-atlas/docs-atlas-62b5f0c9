@@ -1,0 +1,560 @@
+---
+title: "Routing"
+description: "Route collection, prefixing, and GoRouter integration in Nest Flutter"
+---
+
+## Overview
+
+Nest Flutter provides seamless integration with [GoRouter](https://pub.dev/packages/go_router) through the `RouteMixin`. Routes are defined alongside dependency injection providers in modules, creating a cohesive architecture where routing and services are organized together.
+
+## Route Collection Mechanism
+
+The route collection system automatically gathers routes from all modules in your application hierarchy.
+
+### Collection Flow
+
+1. **Start at root module**: `Modular.router()` begins with the root module
+2. **Depth-first traversal**: Recursively processes all imported modules
+3. **Apply prefixes**: Each module's `routePrefix` is applied to its routes
+4. **Prevent duplicates**: Module types are tracked to prevent duplicate processing
+5. **Flatten structure**: All routes are collected into a single flat list
+6. **Create router**: The flat list is passed to GoRouter
+
+### Visual Example
+
+```
+AppModule
+├── routes: [/]
+├── imports:
+│   ├── AuthModule
+│   │   ├── routePrefix: /auth
+│   │   └── routes: [/login, /register]  → [/auth/login, /auth/register]
+│   ├── UserModule
+│   │   ├── routePrefix: /users
+│   │   └── routes: [/, /:id]            → [/users, /users/:id]
+│   └── AdminModule
+│       ├── routePrefix: /admin
+│       └── routes: [/dashboard, /settings] → [/admin/dashboard, /admin/settings]
+
+Final routes: [/, /auth/login, /auth/register, /users, /users/:id, /admin/dashboard, /admin/settings]
+```
+
+### Collection Algorithm
+
+```dart
+List<RouteBase> collectAllRoutes([Set<Type>? processedModuleTypes]) {
+  processedModuleTypes ??= <Type>{};
+  final allRoutes = <RouteBase>[];
+
+  // Skip if this module type has already been processed
+  if (processedModuleTypes.contains(runtimeType)) {
+    return allRoutes; // Return empty list for duplicate module types
+  }
+
+  // Mark this module type as processed
+  processedModuleTypes.add(runtimeType);
+
+  // First, collect routes from imported modules
+  for (final importedModule in imports) {
+    if (importedModule is Module) {
+      allRoutes.addAll(importedModule.collectAllRoutes(processedModuleTypes));
+    }
+  }
+
+  // Then add this module's routes, applying prefix if specified
+  for (final route in routes) {
+    final processedRoute = (routePrefix != null && routePrefix!.isNotEmpty)
+        ? _applyRoutePrefix(route, routePrefix!)
+        : route;
+
+    allRoutes.add(processedRoute);
+  }
+
+  return allRoutes;
+}
+```
+
+## Route Prefixing
+
+### Prefix Application
+
+Route prefixes are applied automatically to all routes in a module.
+
+#### Prefix Normalization Rules
+
+1. **Prefix normalization**:
+   - Always starts with `/`
+   - Never ends with `/`
+   - Empty strings are ignored
+
+2. **Route path normalization**:
+   - Always starts with `/`
+   - Combined with prefix avoiding double slashes
+
+3. **Special handling for root `/`**:
+   - If route path is `/`, the result is just the prefix
+
+### Prefix Examples
+
+```dart
+class ExamplesModule extends Module {
+  @override
+  String get routePrefix => '/api/v1';
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(path: '/', builder: ...),         // → /api/v1
+    GoRoute(path: '/users', builder: ...),    // → /api/v1/users
+    GoRoute(path: 'products', builder: ...),  // → /api/v1/products
+  ];
+}
+```
+
+### Prefix Variations
+
+All these variations produce the same result:
+
+```dart
+// These all become: /api
+routePrefix => '/api';
+routePrefix => 'api';
+routePrefix => '/api/';
+routePrefix => 'api/';
+
+// Combined with path '/users' all produce: /api/users
+path: '/users';
+path: 'users';
+```
+
+### Nested Prefixes
+
+<Note>
+  Each module's prefix is independent. Nested modules don't inherit parent prefixes.
+</Note>
+
+```dart
+class ParentModule extends Module {
+  @override
+  String get routePrefix => '/parent';
+  
+  @override
+  List<Module> get imports => [ChildModule()];
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(path: '/home', builder: ...),  // → /parent/home
+  ];
+}
+
+class ChildModule extends Module {
+  @override
+  String get routePrefix => '/child';
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(path: '/page', builder: ...),  // → /child/page (NOT /parent/child/page)
+  ];
+}
+```
+
+If you want nested prefixes, define the full path:
+
+```dart
+class ChildModule extends Module {
+  @override
+  String get routePrefix => '/parent/child';
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(path: '/page', builder: ...),  // → /parent/child/page
+  ];
+}
+```
+
+## GoRouter Integration
+
+### Basic Router Setup
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:nest_flutter/nest_flutter.dart';
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp.router(
+      routerConfig: Modular.router((router) => router),
+    );
+  }
+}
+```
+
+### Router with Configuration
+
+```dart
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp.router(
+      title: 'My App',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      routerConfig: Modular.router(
+        (router) => GoRouter(
+          routes: router.routes,
+          initialLocation: '/home',
+          debugLogDiagnostics: true,
+          redirect: _handleRedirect,
+          errorBuilder: _buildErrorScreen,
+        ),
+      ),
+    );
+  }
+  
+  String? _handleRedirect(BuildContext context, GoRouterState state) {
+    final authService = Modular.get<AuthService>();
+    final isLoggedIn = authService.isAuthenticated;
+    
+    final isAuthRoute = state.location.startsWith('/auth');
+    
+    if (!isLoggedIn && !isAuthRoute) {
+      return '/auth/login';
+    }
+    
+    if (isLoggedIn && isAuthRoute) {
+      return '/home';
+    }
+    
+    return null; // No redirect
+  }
+  
+  Widget _buildErrorScreen(BuildContext context, GoRouterState state) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Error')),
+      body: Center(
+        child: Text('Error: ${state.error}'),
+      ),
+    );
+  }
+}
+```
+
+### Router Caching
+
+The router is cached by default to prevent recreation during hot reloads.
+
+```dart
+// Check if router is cached
+if (Modular.isRouterCached) {
+  print('Using cached router');
+}
+
+// Get cached router (for debugging)
+final cachedRouter = Modular.cachedRouter;
+
+// Clear cache to force recreation
+Modular.clearRouterCache();
+
+// Force recreation even if cached
+final router = Modular.router(
+  (router) => router,
+  forceRecreate: true,
+);
+```
+
+## Route Definition Patterns
+
+### Simple Routes
+
+```dart
+class HomeModule extends Module {
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/home',
+      builder: (context, state) => HomeScreen(),
+    ),
+    GoRoute(
+      path: '/about',
+      builder: (context, state) => AboutScreen(),
+    ),
+  ];
+}
+```
+
+### Named Routes
+
+```dart
+class UserModule extends Module {
+  @override
+  String get routePrefix => '/users';
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/',
+      name: 'users',
+      builder: (context, state) => UserListScreen(),
+    ),
+    GoRoute(
+      path: '/:id',
+      name: 'user-detail',
+      builder: (context, state) {
+        final userId = state.pathParameters['id']!;
+        return UserDetailScreen(userId: userId);
+      },
+    ),
+  ];
+}
+
+// Navigate using named routes
+context.goNamed('user-detail', pathParameters: {'id': '123'});
+```
+
+### Nested Routes
+
+```dart
+class ProductModule extends Module {
+  @override
+  String get routePrefix => '/products';
+  
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/',
+      builder: (context, state) => ProductListScreen(),
+      routes: [
+        GoRoute(
+          path: ':id',
+          builder: (context, state) {
+            final productId = state.pathParameters['id']!;
+            return ProductDetailScreen(productId: productId);
+          },
+          routes: [
+            GoRoute(
+              path: 'reviews',
+              builder: (context, state) {
+                final productId = state.pathParameters['id']!;
+                return ProductReviewsScreen(productId: productId);
+              },
+            ),
+          ],
+        ),
+      ],
+    ),
+  ];
+}
+
+// Results in routes:
+// /products
+// /products/:id
+// /products/:id/reviews
+```
+
+### Routes with Query Parameters
+
+```dart
+class SearchModule extends Module {
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/search',
+      builder: (context, state) {
+        final query = state.uri.queryParameters['q'] ?? '';
+        final category = state.uri.queryParameters['category'];
+        
+        return SearchScreen(
+          query: query,
+          category: category,
+        );
+      },
+    ),
+  ];
+}
+
+// Navigate with query parameters
+context.go('/search?q=flutter&category=widgets');
+```
+
+### Routes with Custom Transitions
+
+```dart
+class AnimatedModule extends Module {
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/animated',
+      pageBuilder: (context, state) => CustomTransitionPage(
+        key: state.pageKey,
+        child: AnimatedScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: child,
+          );
+        },
+      ),
+    ),
+  ];
+}
+```
+
+## Advanced Patterns
+
+### Authentication Guard
+
+```dart
+class AppModule extends Module {
+  @override
+  List<RouteBase> get routes => [
+    GoRoute(
+      path: '/',
+      redirect: (context, state) {
+        final authService = Modular.get<AuthService>();
+        return authService.isAuthenticated ? '/home' : '/auth/login';
+      },
+    ),
+  ];
+}
+```
+
+### Role-Based Access
+
+```dart
+GoRoute(
+  path: '/admin',
+  redirect: (context, state) {
+    final authService = Modular.get<AuthService>();
+    
+    if (!authService.isAuthenticated) {
+      return '/auth/login';
+    }
+    
+    if (!authService.hasRole('admin')) {
+      return '/unauthorized';
+    }
+    
+    return null; // Allow access
+  },
+  builder: (context, state) => AdminDashboard(),
+)
+```
+
+### Dynamic Route Loading
+
+```dart
+class DynamicModule extends Module {
+  @override
+  List<RouteBase> get routes {
+    final featureFlags = Modular.get<FeatureFlags>();
+    final routes = <RouteBase>[
+      GoRoute(path: '/home', builder: (context, state) => HomeScreen()),
+    ];
+    
+    if (featureFlags.isEnabled('beta-feature')) {
+      routes.add(
+        GoRoute(
+          path: '/beta',
+          builder: (context, state) => BetaFeatureScreen(),
+        ),
+      );
+    }
+    
+    return routes;
+  }
+}
+```
+
+## Navigation
+
+### Imperative Navigation
+
+```dart
+// Push new route
+context.go('/users/123');
+
+// Replace current route
+context.replace('/home');
+
+// Go back
+context.pop();
+
+// Named navigation
+context.goNamed('user-detail', pathParameters: {'id': '123'});
+```
+
+### Declarative Navigation
+
+```dart
+TextButton(
+  onPressed: () => context.go('/profile'),
+  child: Text('View Profile'),
+)
+```
+
+## Best Practices
+
+<Note>
+  **Organize routes with modules**: Keep routes close to the features they serve. Each feature module should define its own routes.
+</Note>
+
+<Note>
+  **Use route prefixes for organization**: Group related routes under a common prefix (e.g., `/auth`, `/admin`, `/api`).
+</Note>
+
+<Note>
+  **Leverage router caching**: The default caching behavior improves hot reload performance in development.
+</Note>
+
+<Warning>
+  **Clear cache when routes change**: If you modify routes at runtime, call `Modular.clearRouterCache()` to ensure changes take effect.
+</Warning>
+
+<Warning>
+  **Avoid duplicate module types**: The same module type in multiple places will only be processed once. Design your module hierarchy to avoid unintended duplicates.
+</Warning>
+
+## Debugging
+
+### Enable Router Diagnostics
+
+```dart
+Modular.router(
+  (router) => GoRouter(
+    routes: router.routes,
+    debugLogDiagnostics: true, // Enable detailed logging
+  ),
+)
+```
+
+### Inspect Collected Routes
+
+```dart
+final appModule = AppModule();
+final routes = appModule.collectAllRoutes();
+
+print('Total routes: ${routes.length}');
+for (final route in routes) {
+  if (route is GoRoute) {
+    print('Route: ${route.path}, Name: ${route.name}');
+  }
+}
+```
+
+### Check Router Cache
+
+```dart
+if (Modular.isRouterCached) {
+  print('Router is cached');
+  final router = Modular.cachedRouter;
+  print('Cached router configuration: ${router?.configuration}');
+} else {
+  print('No router cached');
+}
+```
+
+## See Also
+
+- [Module Class](/api/flutter/module) - Creating modules with routes
+- [ModularApp](/api/flutter/modular-app) - Root widget initialization
+- [Modular Class](/api/flutter/modular) - Router configuration API
+- [GoRouter Documentation](https://pub.dev/packages/go_router) - Official GoRouter docs

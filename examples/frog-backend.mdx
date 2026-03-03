@@ -1,0 +1,701 @@
+---
+title: "Dart Frog Backend Example"
+description: "Complete walkthrough of building a REST API with Dart Frog, Nest Dart modules, and SQLite database"
+---
+
+## Overview
+
+This example demonstrates a complete backend API built with Dart Frog and Nest Dart, featuring:
+
+- Modular architecture with dependency injection
+- SQLite database integration
+- RESTful API endpoints
+- Repository pattern
+- Service layer abstraction
+- Middleware integration
+- Configuration management
+
+## Project Structure
+
+```
+frog_backend/
+├── lib/
+│   ├── app_module.dart           # Root application module
+│   ├── core/
+│   │   └── core.dart
+│   ├── database/
+│   │   └── database_module.dart  # Database configuration
+│   └── modules/
+│       ├── core_module.dart      # Config & logging services
+│       └── user_module.dart      # User domain module
+├── routes/
+│   ├── _middleware.dart          # Global middleware
+│   ├── index.dart                # Root endpoint
+│   └── users/
+│       ├── index.dart            # User list/create
+│       └── [id].dart             # User detail
+├── test/
+└── pubspec.yaml
+```
+
+## Getting Started
+
+<Steps>
+  <Step title="Install Dependencies">
+    Navigate to the example directory and install dependencies:
+
+    ```bash
+    cd examples/frog_backend
+    dart pub get
+    ```
+  </Step>
+
+  <Step title="Start the Development Server">
+    Run the Dart Frog development server:
+
+    ```bash
+    dart_frog dev
+    ```
+
+    The server will start at `http://localhost:8080`
+  </Step>
+
+  <Step title="Test the API">
+    Try the API endpoints:
+
+    <CodeGroup>
+      ```bash Get Welcome Message
+      curl http://localhost:8080
+      ```
+
+      ```bash List Users
+      curl http://localhost:8080/users
+      ```
+
+      ```bash Create User
+      curl -X POST http://localhost:8080/users \
+        -H "Content-Type: application/json" \
+        -d '{"name":"John Doe","email":"john@example.com"}'
+      ```
+
+      ```bash Get User by ID
+      curl http://localhost:8080/users/1
+      ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+## Module Setup
+
+### App Module
+
+The root module orchestrates all feature modules:
+
+```dart lib/app_module.dart
+import 'package:nest_core/nest_core.dart';
+
+import 'database/database_module.dart';
+import 'modules/core_module.dart';
+import 'modules/user_module.dart';
+
+// Main application module
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule(), CoreModule(), UserModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {}
+}
+```
+
+### Database Module
+
+Sets up SQLite database with schema initialization:
+
+```dart lib/database/database_module.dart
+import 'package:nest_core/nest_core.dart';
+import 'package:sqlite3/sqlite3.dart';
+
+class DatabaseService {
+  final Database _database;
+
+  DatabaseService(this._database);
+
+  /// Execute a query and return results
+  ResultSet query(String sql, [List<Object?> parameters = const []]) {
+    return _database.select(sql, parameters);
+  }
+
+  /// Execute a statement (INSERT, UPDATE, DELETE)
+  void execute(String sql, [List<Object?> parameters = const []]) {
+    _database.execute(sql, parameters);
+  }
+
+  /// Execute a statement and return the number of affected rows
+  int executeAndReturnChanges(
+    String sql,
+    [List<Object?> parameters = const []],
+  ) {
+    _database.execute(sql, parameters);
+    return _database.updatedRows;
+  }
+
+  /// Get the last inserted row ID
+  int get lastInsertRowId => _database.lastInsertRowId;
+
+  /// Execute code within a transaction
+  T transaction<T>(T Function() action) {
+    beginTransaction();
+    try {
+      final result = action();
+      commitTransaction();
+      return result;
+    } catch (e) {
+      rollbackTransaction();
+      rethrow;
+    }
+  }
+
+  void beginTransaction() => _database.execute('BEGIN TRANSACTION');
+  void commitTransaction() => _database.execute('COMMIT');
+  void rollbackTransaction() => _database.execute('ROLLBACK');
+  void close() => _database.dispose();
+}
+
+class DatabaseModule extends Module {
+  @override
+  List<Module> get imports => [];
+
+  @override
+  List<Type> get exports => [DatabaseService];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    final database = sqlite3.open('app.db');
+    _initializeSchema(database);
+
+    // Register SQLite database instance
+    locator.registerSingleton<Database>(database);
+
+    // Register DatabaseService
+    locator.registerSingleton<DatabaseService>(DatabaseService(database));
+  }
+
+  void _initializeSchema(Database db) {
+    // Create users table
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL
+      )
+    ''');
+  }
+}
+```
+
+### Core Module
+
+Provides shared services like configuration and logging:
+
+```dart lib/modules/core_module.dart
+import 'package:nest_core/nest_core.dart';
+
+class ConfigService {
+  final Map<String, dynamic> _config = {
+    'database_type': 'in-memory',
+    'port': 8080,
+    'environment': 'development',
+    'jwt_secret': 'your-secret-key',
+    'app_name': 'Dart Frog Demo API',
+    'version': '1.0.0',
+  };
+
+  T get<T>(String key) => _config[key] as T;
+
+  String get databaseType => get<String>('database_type');
+  int get port => get<int>('port');
+  String get environment => get<String>('environment');
+  String get jwtSecret => get<String>('jwt_secret');
+  String get appName => get<String>('app_name');
+  String get version => get<String>('version');
+}
+
+class LoggerService {
+  void log(String message) {
+    print('[LOG] ${DateTime.now()}: $message');
+  }
+
+  void error(String message) {
+    print('[ERROR] ${DateTime.now()}: $message');
+  }
+}
+
+class CoreModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<ConfigService>(ConfigService());
+    locator.registerSingleton<LoggerService>(LoggerService());
+  }
+
+  @override
+  List<Type> get exports => [ConfigService, LoggerService];
+}
+```
+
+### User Module
+
+Implements the complete user domain with repository and service layers:
+
+```dart lib/modules/user_module.dart
+import 'package:nest_core/nest_core.dart';
+import '../database/database_module.dart';
+import 'core_module.dart';
+
+class User {
+  final int id;
+  final String name;
+  final String email;
+
+  const User({required this.id, required this.name, required this.email});
+
+  factory User.fromMap(Map<String, dynamic> map) {
+    return User(
+      id: map['id'] as int,
+      name: map['name'] as String,
+      email: map['email'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'email': email};
+}
+
+class UserRepository {
+  final DatabaseService _database;
+  final LoggerService _logger;
+
+  UserRepository(this._database, this._logger);
+
+  List<User> findAll() {
+    _logger.log('Finding all users');
+    final results = _database.query('SELECT * FROM users ORDER BY id');
+    return results.map((row) => User.fromMap(row)).toList();
+  }
+
+  User? findById(int id) {
+    _logger.log('Finding user by id: $id');
+    final results = _database.query('SELECT * FROM users WHERE id = ?', [id]);
+    if (results.isEmpty) return null;
+    return User.fromMap(results.first);
+  }
+
+  User? create(String name, String email) {
+    _logger.log('Creating user: $name');
+    _database.execute('INSERT INTO users (name, email) VALUES (?, ?)', [
+      name,
+      email,
+    ]);
+    final id = _database.lastInsertRowId;
+    return User(id: id, name: name, email: email);
+  }
+
+  bool update(int id, {String? name, String? email}) {
+    _logger.log('Updating user: $id');
+    final updates = <String>[];
+    final params = <Object?>[];
+
+    if (name != null) {
+      updates.add('name = ?');
+      params.add(name);
+    }
+    if (email != null) {
+      updates.add('email = ?');
+      params.add(email);
+    }
+
+    if (updates.isEmpty) return false;
+
+    params.add(id);
+    final sql = 'UPDATE users SET ${updates.join(', ')} WHERE id = ?';
+    final changes = _database.executeAndReturnChanges(sql, params);
+    return changes > 0;
+  }
+
+  bool delete(int id) {
+    _logger.log('Deleting user: $id');
+    final changes = _database.executeAndReturnChanges(
+      'DELETE FROM users WHERE id = ?',
+      [id],
+    );
+    return changes > 0;
+  }
+}
+
+class UserService {
+  final UserRepository _repository;
+  final LoggerService _logger;
+
+  UserService(this._repository, this._logger);
+
+  List<User> getAllUsers() {
+    _logger.log('UserService: Getting all users');
+    return _repository.findAll();
+  }
+
+  User? getUserById(int id) {
+    _logger.log('UserService: Getting user by id: $id');
+    return _repository.findById(id);
+  }
+
+  User? createUser(String name, String email) {
+    _logger.log('UserService: Creating user: $name');
+    return _repository.create(name, email);
+  }
+
+  bool updateUser(int id, {String? name, String? email}) {
+    _logger.log('UserService: Updating user: $id');
+    return _repository.update(id, name: name, email: email);
+  }
+
+  bool deleteUser(int id) {
+    _logger.log('UserService: Deleting user: $id');
+    return _repository.delete(id);
+  }
+}
+
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule(), CoreModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<UserRepository>(
+      UserRepository(
+        locator.get<DatabaseService>(),
+        locator.get<LoggerService>(),
+      ),
+    );
+
+    locator.registerSingleton<UserService>(
+      UserService(locator.get<UserRepository>(), locator.get<LoggerService>()),
+    );
+  }
+}
+```
+
+<Note>
+  Notice the layered architecture: **Repository** handles data access, **Service** handles business logic, and **Controllers** (route handlers) handle HTTP.
+</Note>
+
+## Middleware Integration
+
+The middleware initializes Nest modules and makes services available to routes:
+
+```dart routes/_middleware.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog_backend/app_module.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+final message = 'Welcome to Dart Frog with NestJS-like Modules!';
+
+Handler middleware(Handler handler) {
+  if (!Modular.isInitialized) {
+    Modular.initialize(AppModule());
+  }
+
+  return handler
+      .use(nestFrogMiddleware(AppModule()))
+      .use(provider<String>((context) => message));
+}
+```
+
+<Card title="Important" icon="circle-info">
+  The `nestFrogMiddleware` must be added to make Nest services available in route handlers via `Modular.of(context)`.
+</Card>
+
+## Route Handlers
+
+### Root Endpoint
+
+Displays API information using injected services:
+
+```dart routes/index.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog_backend/modules/core_module.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+Response onRequest(RequestContext context) {
+  // Using the new Modular.of(context) API
+  final modular = Modular.of(context);
+  final welcomeMessage = modular.get<String>();
+  final logger = modular.get<LoggerService>();
+  final config = modular.get<ConfigService>();
+
+  logger.log('Index route accessed');
+
+  final response = {
+    'message': welcomeMessage,
+    'app_name': config.appName,
+    'version': config.version,
+    'environment': config.environment,
+    'database_type': config.databaseType,
+    'port': config.port,
+    'timestamp': DateTime.now().toIso8601String(),
+  };
+
+  return Response.json(body: response);
+}
+```
+
+### User List Endpoint
+
+Handles GET and POST requests for users:
+
+```dart routes/users/index.dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog_backend/modules/core_module.dart';
+import 'package:nest_frog_backend/modules/user_module.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+Future<Response> onRequest(RequestContext context) async {
+  // Using familiar Modular API
+  final modular = Modular.of(context);
+  final userService = modular.get<UserService>();
+  final logger = modular.get<LoggerService>();
+
+  logger.log('Users route accessed');
+
+  switch (context.request.method) {
+    case HttpMethod.get:
+      return _getUsers(userService);
+    case HttpMethod.post:
+      return await _createUser(context, userService);
+    default:
+      return Response(statusCode: 405, body: 'Method not allowed');
+  }
+}
+
+Response _getUsers(UserService userService) {
+  final users = userService.getAllUsers();
+
+  return Response.json(
+    body: {
+      'users': users.map((user) => user.toJson()).toList(),
+      'count': users.length,
+      'timestamp': DateTime.now().toIso8601String(),
+    },
+  );
+}
+
+Future<Response> _createUser(
+  RequestContext context,
+  UserService userService,
+) async {
+  try {
+    final body = await context.request.json() as Map<String, dynamic>;
+    final name = body['name'] as String?;
+    final email = body['email'] as String?;
+
+    if (name == null || email == null) {
+      return Response.json(
+        statusCode: 400,
+        body: {
+          'error': 'Missing required fields',
+          'message': 'Both name and email are required',
+        },
+      );
+    }
+
+    final user = userService.createUser(name, email);
+    if (user == null) {
+      return Response.json(
+        statusCode: 500,
+        body: {
+          'error': 'Failed to create user',
+          'message': 'An error occurred while creating the user',
+        },
+      );
+    }
+
+    return Response.json(
+      statusCode: 201,
+      body: {
+        'message': 'User created successfully',
+        'user': user.toJson(),
+        'timestamp': DateTime.now().toIso8601String(),
+      },
+    );
+  } catch (e) {
+    return Response.json(
+      statusCode: 400,
+      body: {
+        'error': 'Invalid request body',
+        'message': 'Request body must be valid JSON with name and email fields',
+      },
+    );
+  }
+}
+```
+
+### User Detail Endpoint
+
+Handles getting a specific user by ID:
+
+```dart routes/users/[id].dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:nest_frog_backend/modules/core_module.dart';
+import 'package:nest_frog_backend/modules/user_module.dart';
+import 'package:nest_frog/nest_frog.dart';
+
+Response onRequest(RequestContext context, String id) {
+  final modular = Modular.of(context);
+  final userService = modular.get<UserService>();
+  final logger = modular.get<LoggerService>();
+
+  logger.log('User detail route accessed for id: $id');
+
+  switch (context.request.method) {
+    case HttpMethod.get:
+      return _getUserById(userService, id);
+    default:
+      return Response(statusCode: 405, body: 'Method not allowed');
+  }
+}
+
+Response _getUserById(UserService userService, String id) {
+  final userId = int.tryParse(id);
+  if (userId == null) {
+    return Response.json(
+      statusCode: 400,
+      body: {
+        'error': 'Invalid user ID',
+        'message': 'User ID must be a valid integer',
+      },
+    );
+  }
+
+  final user = userService.getUserById(userId);
+  if (user == null) {
+    return Response.json(
+      statusCode: 404,
+      body: {
+        'error': 'User not found',
+        'message': 'User with ID $userId does not exist',
+      },
+    );
+  }
+
+  return Response.json(
+    body: {
+      'user': user.toJson(),
+      'timestamp': DateTime.now().toIso8601String(),
+    },
+  );
+}
+```
+
+## API Endpoints
+
+<CodeGroup>
+```bash GET / - Welcome message
+curl http://localhost:8080
+
+# Response
+{
+  "message": "Welcome to Dart Frog with NestJS-like Modules!",
+  "app_name": "Dart Frog Demo API",
+  "version": "1.0.0",
+  "environment": "development",
+  "database_type": "in-memory",
+  "port": 8080,
+  "timestamp": "2026-03-03T12:00:00.000Z"
+}
+```
+
+```bash GET /users - List all users
+curl http://localhost:8080/users
+
+# Response
+{
+  "users": [
+    {"id": 1, "name": "John Doe", "email": "john@example.com"},
+    {"id": 2, "name": "Jane Smith", "email": "jane@example.com"}
+  ],
+  "count": 2,
+  "timestamp": "2026-03-03T12:00:00.000Z"
+}
+```
+
+```bash POST /users - Create a user
+curl -X POST http://localhost:8080/users \
+  -H "Content-Type: application/json" \
+  -d '{"name":"John Doe","email":"john@example.com"}'
+
+# Response
+{
+  "message": "User created successfully",
+  "user": {"id": 1, "name": "John Doe", "email": "john@example.com"},
+  "timestamp": "2026-03-03T12:00:00.000Z"
+}
+```
+
+```bash GET /users/:id - Get user by ID
+curl http://localhost:8080/users/1
+
+# Response
+{
+  "user": {"id": 1, "name": "John Doe", "email": "john@example.com"},
+  "timestamp": "2026-03-03T12:00:00.000Z"
+}
+```
+</CodeGroup>
+
+## Key Concepts Demonstrated
+
+<CardGroup cols={2}>
+  <Card title="Layered Architecture" icon="layer-group">
+    Separation of concerns with Repository (data), Service (business logic), and Controller (HTTP) layers.
+  </Card>
+  
+  <Card title="Module Dependencies" icon="diagram-project">
+    UserModule imports DatabaseModule and CoreModule to access their exported services.
+  </Card>
+  
+  <Card title="Middleware Integration" icon="filter">
+    Nest modules integrate seamlessly with Dart Frog's middleware system.
+  </Card>
+  
+  <Card title="Type-Safe DI" icon="shield-halved">
+    Services are injected with full type safety using `Modular.of(context).get<T>()`.
+  </Card>
+</CardGroup>
+
+## Testing
+
+The modular architecture makes testing straightforward:
+
+```dart
+import 'package:test/test.dart';
+import 'package:nest_core/nest_core.dart';
+
+void main() {
+  test('UserService can be instantiated with dependencies', () async {
+    // Initialize module
+    final module = UserModule();
+    final locator = ModuleLocator();
+    await module.registerProviders(locator);
+
+    // Get service
+    final userService = locator.get<UserService>();
+    
+    expect(userService, isNotNull);
+  });
+}
+```
+
+## Next Steps
+
+- Learn about [Module System](/core/modules/modules) for advanced patterns
+- Explore [Dependency Injection](/core/modules/dependency-injection)
+- Check out the [Flutter App Example](/examples/flutter-app) for a frontend
+- See [Dart Frog Integration](/integrations/dart-frog) for more backend features

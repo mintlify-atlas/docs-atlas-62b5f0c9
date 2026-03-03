@@ -1,0 +1,496 @@
+---
+title: Pure Dart Usage
+description: Use Nest Dart in any Dart application without framework dependencies
+---
+
+# Pure Dart Usage
+
+Nest Dart's core module system (`nest_core`) can be used in any Dart application, including CLI tools, servers, and custom frameworks.
+
+## Installation
+
+Add the core package to your `pubspec.yaml`:
+
+```yaml
+dependencies:
+  nest_core: ^latest
+```
+
+## Quick Start
+
+<Steps>
+  <Step title="Create Your Modules">
+    Define modules for organizing your application:
+
+    ```dart
+    import 'package:nest_core/nest_core.dart';
+
+    class DatabaseModule extends Module {
+      @override
+      Future<void> providers(Locator locator) async {
+        locator.registerSingleton<Database>(
+          Database(connectionString: 'localhost:5432'),
+        );
+      }
+
+      @override
+      List<Type> get exports => [Database];
+    }
+
+    class UserModule extends Module {
+      @override
+      List<Module> get imports => [DatabaseModule()];
+
+      @override
+      Future<void> providers(Locator locator) async {
+        locator.registerSingleton<UserRepository>(
+          UserRepository(locator.get<Database>()),
+        );
+        locator.registerSingleton<UserService>(
+          UserService(locator.get<UserRepository>()),
+        );
+      }
+
+      @override
+      List<Type> get exports => [UserService];
+    }
+    ```
+  </Step>
+
+  <Step title="Create Application Container">
+    Initialize the container with your root module:
+
+    ```dart
+    import 'package:nest_core/nest_core.dart';
+
+    void main() async {
+      // Create the application container
+      final container = ApplicationContainer();
+
+      // Create and register your app module
+      final appModule = AppModule();
+      await container.registerModule(appModule);
+
+      // Wait for all async services to be ready
+      await container.waitUntilReady();
+
+      // Access your services
+      final userService = container.get<UserService>();
+      final users = await userService.getAllUsers();
+      print('Users: $users');
+    }
+
+    class AppModule extends Module {
+      @override
+      List<Module> get imports => [UserModule()];
+
+      @override
+      Future<void> providers(Locator locator) async {}
+    }
+    ```
+  </Step>
+</Steps>
+
+## ApplicationContainer
+
+The `ApplicationContainer` is the core of Nest Dart's dependency injection system.
+
+### Creating a Container
+
+```dart
+import 'package:nest_core/nest_core.dart';
+
+// Create a new container
+final container = ApplicationContainer();
+
+// Or provide a custom GetIt instance
+final customGetIt = GetIt.asNewInstance();
+final container = ApplicationContainer(customGetIt);
+```
+
+### Registering Modules
+
+<CodeGroup>
+
+```dart Single Module
+final container = ApplicationContainer();
+await container.registerModule(AppModule());
+```
+
+```dart Multiple Modules
+final container = ApplicationContainer();
+await container.registerModules([
+  DatabaseModule(),
+  UserModule(),
+  AuthModule(),
+]);
+```
+
+</CodeGroup>
+
+### Accessing Services
+
+Retrieve registered services from the container:
+
+```dart
+// Get a service
+final userService = container.get<UserService>();
+
+// Get with instance name
+final premiumService = container.get<UserService>(instanceName: 'premium');
+
+// Get async service
+final service = await container.getAsync<UserService>();
+
+// Get with parameters
+final service = container.getWithParams<UserService>(param1, param2);
+
+// Check if registered
+if (container.isRegistered<UserService>()) {
+  final service = container.get<UserService>();
+}
+```
+
+## Module System
+
+### Basic Module
+
+A minimal module with services:
+
+```dart
+import 'package:nest_core/nest_core.dart';
+
+class LoggerModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<Logger>(Logger());
+  }
+
+  @override
+  List<Type> get exports => [Logger];
+}
+```
+
+### Module with Dependencies
+
+Import other modules to access their services:
+
+```dart
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [
+    DatabaseModule(),
+    LoggerModule(),
+  ];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    // Access imported services
+    final database = locator.get<Database>();
+    final logger = locator.get<Logger>();
+
+    locator.registerSingleton<UserService>(
+      UserService(database, logger),
+    );
+  }
+
+  @override
+  List<Type> get exports => [UserService];
+}
+```
+
+### Lifecycle Hooks
+
+Modules support initialization and cleanup hooks:
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<Database>(Database());
+  }
+
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    // Called after all modules are registered
+    final database = locator.get<Database>();
+    await database.connect();
+    await database.runMigrations();
+    print('Database initialized and connected');
+  }
+
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    // Called when container is reset
+    final database = locator.get<Database>();
+    await database.disconnect();
+    print('Database connection closed');
+  }
+
+  @override
+  List<Type> get exports => [Database];
+}
+```
+
+## Dependency Registration
+
+The `Locator` interface provides methods for registering dependencies:
+
+### Singleton
+
+Register a single instance shared across the application:
+
+```dart
+locator.registerSingleton<UserService>(
+  UserService(locator.get<Database>()),
+);
+
+// With dispose callback
+locator.registerSingleton<Database>(
+  Database(),
+  dispose: (db) => db.close(),
+);
+```
+
+### Factory
+
+Create a new instance each time:
+
+```dart
+locator.registerFactory<EmailService>(
+  () => EmailService(locator.get<SmtpClient>()),
+);
+```
+
+### Lazy Singleton
+
+Create instance only when first accessed:
+
+```dart
+locator.registerLazySingleton<ExpensiveService>(
+  () => ExpensiveService(locator.get<Database>()),
+);
+
+// With dispose callback
+locator.registerLazySingleton<FileManager>(
+  () => FileManager(),
+  dispose: (fm) => fm.closeAllFiles(),
+);
+```
+
+### Named Instances
+
+Register multiple instances of the same type:
+
+```dart
+locator.registerSingleton<Database>(
+  Database(connectionString: 'primary:5432'),
+  instanceName: 'primary',
+);
+
+locator.registerSingleton<Database>(
+  Database(connectionString: 'replica:5432'),
+  instanceName: 'replica',
+);
+
+// Access named instances
+final primary = container.get<Database>(instanceName: 'primary');
+final replica = container.get<Database>(instanceName: 'replica');
+```
+
+## Container Lifecycle
+
+### Wait for Readiness
+
+Wait for all services to be initialized:
+
+```dart
+final container = ApplicationContainer();
+await container.registerModule(AppModule());
+
+// Wait for container to be ready
+await container.waitUntilReady();
+
+// Wait with timeout
+await container.waitUntilReady(timeout: Duration(seconds: 10));
+
+// Check if ready
+if (container.isReady) {
+  print('Container is ready');
+}
+```
+
+### Reset Container
+
+Reset the container and cleanup resources:
+
+```dart
+// Calls onModuleDestroy on all modules
+await container.reset();
+```
+
+<Note>
+  The `reset()` method calls `onModuleDestroy()` on all modules in reverse initialization order, allowing proper cleanup of resources like database connections.
+</Note>
+
+## Service Exports and Access Control
+
+Nest Dart enforces strict access control for services between modules:
+
+```dart
+class PrivateModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<PublicService>(PublicService());
+    locator.registerSingleton<PrivateService>(PrivateService());
+  }
+
+  @override
+  List<Type> get exports => [PublicService]; // Only PublicService is accessible
+}
+
+class ConsumerModule extends Module {
+  @override
+  List<Module> get imports => [PrivateModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    // This works - PublicService is exported
+    final public = locator.get<PublicService>();
+
+    // This throws ServiceNotExportedException - PrivateService is not exported
+    // final private = locator.get<PrivateService>();
+  }
+}
+```
+
+## Complete CLI Example
+
+Here's a complete example of a CLI application:
+
+```dart
+import 'package:nest_core/nest_core.dart';
+
+void main() async {
+  // Initialize container
+  final container = ApplicationContainer();
+  await container.registerModule(AppModule());
+  await container.waitUntilReady();
+
+  // Get CLI service and run
+  final cli = container.get<CliService>();
+  await cli.run();
+
+  // Cleanup
+  await container.reset();
+}
+
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    DatabaseModule(),
+    LoggerModule(),
+    UserModule(),
+  ];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<CliService>(
+      CliService(
+        userService: locator.get<UserService>(),
+        logger: locator.get<Logger>(),
+      ),
+    );
+  }
+}
+
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<Database>(
+      Database(connectionString: 'localhost:5432'),
+      dispose: (db) => db.close(),
+    );
+  }
+
+  @override
+  Future<void> onModuleInit(Locator locator, ModuleContext context) async {
+    final db = locator.get<Database>();
+    await db.connect();
+    print('Database connected');
+  }
+
+  @override
+  Future<void> onModuleDestroy(Locator locator, ModuleContext context) async {
+    final db = locator.get<Database>();
+    await db.disconnect();
+    print('Database disconnected');
+  }
+
+  @override
+  List<Type> get exports => [Database];
+}
+
+class LoggerModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<Logger>(Logger());
+  }
+
+  @override
+  List<Type> get exports => [Logger];
+}
+
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule(), LoggerModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<UserRepository>(
+      UserRepository(locator.get<Database>()),
+    );
+    locator.registerSingleton<UserService>(
+      UserService(
+        repository: locator.get<UserRepository>(),
+        logger: locator.get<Logger>(),
+      ),
+    );
+  }
+
+  @override
+  List<Type> get exports => [UserService];
+}
+
+class CliService {
+  final UserService userService;
+  final Logger logger;
+
+  CliService({required this.userService, required this.logger});
+
+  Future<void> run() async {
+    logger.log('CLI started');
+    final users = await userService.getAllUsers();
+    print('Found ${users.length} users');
+  }
+}
+```
+
+## Best Practices
+
+<Tip>
+  - Use modules to organize related services and dependencies
+  - Export only services that other modules need to access
+  - Leverage lifecycle hooks for initialization and cleanup
+  - Use `waitUntilReady()` for async service initialization
+  - Always call `container.reset()` for proper cleanup
+  - Prefer singleton registration for shared state
+  - Use factory registration for stateless services
+</Tip>
+
+## See Also
+
+- [Core Concepts](/core/modules/modules) - Learn about the module system
+- [Dependency Injection](/core/modules/dependency-injection) - Understand the DI container
+- [Flutter Integration](/platforms/flutter) - Flutter platform integration
+- [Dart Frog Integration](/platforms/dart-frog) - Backend API integration

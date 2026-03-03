@@ -1,0 +1,272 @@
+---
+title: 'Modules'
+description: 'Organize your application into modular, reusable components with the Module system'
+---
+
+## Overview
+
+The Module system in Nest Dart provides a powerful way to organize your application into cohesive, reusable units. Inspired by NestJS, modules encapsulate related functionality and manage dependencies through a controlled import/export mechanism.
+
+<Note>
+  Modules are the fundamental building blocks of a Nest Dart application. Each module defines its own providers, imports dependencies from other modules, and exports services for use by other modules.
+</Note>
+
+## Module Class
+
+All modules extend the abstract `Module` class, which provides three key properties:
+
+```dart
+abstract class Module {
+  /// List of modules that this module depends on
+  List<Module> get imports => [];
+
+  /// Configure providers/services for dependency injection
+  Future<void> providers(Locator locator) async {}
+
+  /// List of provider types that this module exports
+  List<Type> get exports => [];
+}
+```
+
+### Creating a Module
+
+Here's a basic example of creating a module:
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register services for this module
+    locator.registerLazySingleton<DatabaseService>(
+      () => DatabaseService(),
+    );
+    
+    locator.registerFactory<UserRepository>(
+      () => UserRepository(locator<DatabaseService>()),
+    );
+  }
+
+  @override
+  List<Type> get exports => [DatabaseService, UserRepository];
+}
+```
+
+## Module Properties
+
+<ParamField path="imports" type="List<Module>">
+  Defines dependencies on other modules. Services from imported modules are accessible if they are exported.
+  
+  ```dart
+  @override
+  List<Module> get imports => [DatabaseModule(), AuthModule()];
+  ```
+</ParamField>
+
+<ParamField path="providers" type="Future<void> Function(Locator)">
+  Configure all providers/services for dependency injection. This method registers services using the `Locator` interface.
+  
+  <Tip>
+    This method can be async to support services that require async initialization, such as `SharedPreferences` or database connections.
+  </Tip>
+</ParamField>
+
+<ParamField path="exports" type="List<Type>">
+  List of provider types that this module makes available to other modules. Only exported services can be accessed by modules that import this module.
+  
+  ```dart
+  @override
+  List<Type> get exports => [UserService, AuthService];
+  ```
+</ParamField>
+
+## Module Organization
+
+### Feature Modules
+
+Organize related features into dedicated modules:
+
+```dart
+class UserModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<UserService>(
+      () => UserService(locator<UserRepository>()),
+    );
+    
+    locator.registerFactory<UserController>(
+      () => UserController(locator<UserService>()),
+    );
+  }
+
+  @override
+  List<Type> get exports => [UserService];
+}
+```
+
+### Shared Modules
+
+Create shared modules for common functionality:
+
+```dart
+class SharedModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<LoggerService>(
+      LoggerService(),
+    );
+    
+    locator.registerLazySingleton<ConfigService>(
+      () => ConfigService(),
+    );
+  }
+
+  @override
+  List<Type> get exports => [LoggerService, ConfigService];
+}
+```
+
+## Module Registration
+
+Modules are registered with the `ApplicationContainer`:
+
+```dart
+final container = ApplicationContainer();
+
+// Register a single module
+await container.registerModule(AppModule());
+
+// Register multiple modules
+await container.registerModules([
+  DatabaseModule(),
+  AuthModule(),
+  UserModule(),
+]);
+```
+
+<Note>
+  When you register a module with the container, all its imported modules are automatically registered in the correct dependency order.
+</Note>
+
+## Module Imports and Dependencies
+
+Modules can import other modules to access their exported services:
+
+```dart
+class AuthModule extends Module {
+  @override
+  List<Module> get imports => [
+    DatabaseModule(),
+    CryptoModule(),
+  ];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    // Can access DatabaseService because DatabaseModule exports it
+    locator.registerLazySingleton<AuthService>(
+      () => AuthService(
+        database: locator<DatabaseService>(),
+        crypto: locator<CryptoService>(),
+      ),
+    );
+  }
+
+  @override
+  List<Type> get exports => [AuthService];
+}
+```
+
+<Warning>
+  Circular dependencies between modules will prevent registration. Ensure your module dependency graph is acyclic.
+</Warning>
+
+## Dependency Resolution Order
+
+The framework automatically resolves module dependencies:
+
+1. **Duplicate Prevention**: Each module type is registered only once
+2. **Dependency-First**: Imported modules are registered before the importing module
+3. **Provider Access**: Services are only accessible if properly exported
+
+From `module.dart:128-149`:
+
+```dart
+Future<void> _register(
+  GetIt getIt,
+  Set<Type> registeredModules,
+  ModuleContext context,
+) async {
+  final moduleType = runtimeType;
+
+  // Prevent circular dependencies and duplicate registrations
+  if (registeredModules.contains(moduleType)) {
+    return;
+  }
+
+  registeredModules.add(moduleType);
+
+  // Register all imported modules first to establish dependency chain
+  for (final importedModule in imports) {
+    await importedModule._register(getIt, registeredModules, context);
+  }
+
+  // Register this module's services
+  final scopedGetIt = _ScopedGetIt(getIt, context, moduleType);
+  await providers(scopedGetIt);
+}
+```
+
+## Root Module Pattern
+
+Create a root module that imports all feature modules:
+
+```dart
+class AppModule extends Module {
+  @override
+  List<Module> get imports => [
+    SharedModule(),
+    DatabaseModule(),
+    AuthModule(),
+    UserModule(),
+    ProductModule(),
+  ];
+
+  @override
+  Future<void> providers(Locator locator) async {
+    // Register app-level services
+    locator.registerSingleton<AppService>(
+      AppService(),
+    );
+  }
+
+  @override
+  List<Type> get exports => [AppService];
+}
+```
+
+## Best Practices
+
+<Tip>
+  **Single Responsibility**: Each module should have a clear, focused purpose (e.g., authentication, database access, user management).
+</Tip>
+
+<Tip>
+  **Minimal Exports**: Only export services that need to be used by other modules. Keep internal implementation details private.
+</Tip>
+
+<Tip>
+  **Explicit Dependencies**: Declare all module dependencies in the `imports` list for clear dependency visualization.
+</Tip>
+
+<Warning>
+  Services not listed in `exports` cannot be accessed by other modules, even if those modules import your module.
+</Warning>
+
+## Next Steps
+
+- Learn about [Dependency Injection](/core/dependency-injection) to understand how services are resolved
+- Explore [Providers](/core/providers) to see different registration strategies
+- Understand [Exports](/core/exports) and access control mechanisms
+- Implement [Lifecycle Hooks](/core/lifecycle) for initialization and cleanup

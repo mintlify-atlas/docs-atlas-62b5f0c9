@@ -1,0 +1,489 @@
+---
+title: 'Providers'
+description: 'Register services with different lifecycle strategies: singleton, factory, and lazy singleton'
+---
+
+## Overview
+
+Providers are the fundamental building blocks of dependency injection in Nest Dart. They define how services are created, cached, and disposed of throughout your application's lifecycle.
+
+<Note>
+  Nest Dart supports three provider types: **Singleton**, **Factory**, and **Lazy Singleton**. Each has different instantiation and caching behavior.
+</Note>
+
+## Provider Types
+
+### Singleton
+
+A singleton is instantiated immediately and lives for the entire application lifetime.
+
+<ParamField path="registerSingleton" type="void">
+  Registers a pre-instantiated object as a singleton.
+  
+  ```dart
+  void registerSingleton<T extends Object>(
+    T instance, {
+    String? instanceName,
+    bool? signalsReady,
+    DisposingFunc<T>? dispose,
+  });
+  ```
+</ParamField>
+
+**Characteristics:**
+- Instance is created **immediately** when registered
+- Same instance is returned for all requests
+- Lives until container reset
+- Best for eagerly-initialized services
+
+**Example:**
+
+```dart
+class ConfigModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Create and register immediately
+    final config = AppConfig(
+      apiUrl: 'https://api.example.com',
+      timeout: Duration(seconds: 30),
+    );
+    
+    locator.registerSingleton<AppConfig>(config);
+  }
+  
+  @override
+  List<Type> get exports => [AppConfig];
+}
+```
+
+**With Async Initialization:**
+
+```dart
+class StorageModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Initialize async service
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Register as singleton
+    locator.registerSingleton<SharedPreferences>(prefs);
+    
+    // Create service using the async dependency
+    locator.registerSingleton<StorageService>(
+      StorageService(prefs),
+    );
+  }
+}
+```
+
+<Tip>
+  Use singletons for services that require async initialization (like `SharedPreferences`) or need to be ready immediately on app start.
+</Tip>
+
+### Lazy Singleton
+
+A lazy singleton is instantiated only when first requested and then cached.
+
+<ParamField path="registerLazySingleton" type="void">
+  Registers a factory function that will be called once on first access.
+  
+  ```dart
+  void registerLazySingleton<T extends Object>(
+    FactoryFunc<T> factoryFunc, {
+    String? instanceName,
+    DisposingFunc<T>? dispose,
+  });
+  ```
+</ParamField>
+
+**Characteristics:**
+- Factory function called **only on first access**
+- Same instance returned for subsequent requests
+- Delays initialization until needed
+- Best for services that may not always be used
+
+**Example:**
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Not created until first locator<DatabaseService>() call
+    locator.registerLazySingleton<DatabaseService>(
+      () => DatabaseService(
+        host: 'localhost',
+        port: 5432,
+      ),
+    );
+    
+    locator.registerLazySingleton<UserRepository>(
+      () => UserRepository(
+        database: locator<DatabaseService>(),
+      ),
+    );
+  }
+  
+  @override
+  List<Type> get exports => [DatabaseService, UserRepository];
+}
+```
+
+**With Dependencies:**
+
+```dart
+class AuthModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule(), CryptoModule()];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerLazySingleton<TokenService>(
+      () => TokenService(
+        crypto: locator<CryptoService>(),
+      ),
+    );
+    
+    locator.registerLazySingleton<AuthService>(
+      () => AuthService(
+        database: locator<DatabaseService>(),
+        tokenService: locator<TokenService>(),
+      ),
+    );
+  }
+}
+```
+
+<Tip>
+  Lazy singletons are ideal for most services in your application. They balance memory usage with initialization cost.
+</Tip>
+
+### Factory
+
+A factory creates a **new instance** on every request.
+
+<ParamField path="registerFactory" type="void">
+  Registers a factory function that will be called on every access.
+  
+  ```dart
+  void registerFactory<T extends Object>(
+    FactoryFunc<T> factoryFunc, {
+    String? instanceName,
+  });
+  ```
+</ParamField>
+
+**Characteristics:**
+- Factory function called **on every access**
+- Different instance returned each time
+- No caching
+- Best for stateful or short-lived objects
+
+**Example:**
+
+```dart
+class LoggerModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // New logger instance for each request
+    locator.registerFactory<RequestLogger>(
+      () => RequestLogger(
+        timestamp: DateTime.now(),
+        requestId: Uuid().v4(),
+      ),
+    );
+  }
+}
+
+// Usage - each call gets a new instance
+final logger1 = container.get<RequestLogger>(); // New instance
+final logger2 = container.get<RequestLogger>(); // Different instance
+assert(logger1 != logger2);
+```
+
+**With Parameters:**
+
+```dart
+class ReportModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerFactory<ReportGenerator>(
+      () => ReportGenerator(
+        format: 'pdf',
+        // Can access other services
+        dataService: locator<DataService>(),
+      ),
+    );
+  }
+}
+```
+
+<Warning>
+  Factories create new instances on every access. Be cautious with expensive object creation or use lazy singletons instead.
+</Warning>
+
+## Comparison Table
+
+| Feature | Singleton | Lazy Singleton | Factory |
+|---------|-----------|----------------|----------|
+| **When Created** | On registration | On first access | On every access |
+| **Caching** | Yes | Yes | No |
+| **Memory** | Immediate allocation | Deferred allocation | Minimal |
+| **Use Case** | App config, async init | Most services | Stateful objects |
+| **Performance** | Fast access | Fast after first | Depends on creation cost |
+
+## Disposal and Cleanup
+
+Providers can define cleanup logic:
+
+```dart
+class DatabaseModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    locator.registerSingleton<DatabaseConnection>(
+      await DatabaseConnection.connect(),
+      dispose: (connection) async {
+        await connection.close();
+        print('Database connection closed');
+      },
+    );
+    
+    locator.registerLazySingleton<FileLogger>(
+      () => FileLogger('app.log'),
+      dispose: (logger) async {
+        await logger.flush();
+        await logger.close();
+      },
+    );
+  }
+}
+```
+
+<Note>
+  Disposal functions are called automatically when the container is reset or when the application shuts down.
+</Note>
+
+## Named Providers
+
+Register multiple instances of the same type:
+
+```dart
+class ApiModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Production API
+    locator.registerSingleton<ApiClient>(
+      ApiClient(baseUrl: 'https://api.example.com'),
+      instanceName: 'production',
+    );
+    
+    // Staging API
+    locator.registerSingleton<ApiClient>(
+      ApiClient(baseUrl: 'https://staging.example.com'),
+      instanceName: 'staging',
+    );
+    
+    // Mock API for testing
+    locator.registerFactory<ApiClient>(
+      () => MockApiClient(),
+      instanceName: 'mock',
+    );
+  }
+}
+
+// Retrieve specific instances
+final prodApi = container.get<ApiClient>(instanceName: 'production');
+final stagingApi = container.get<ApiClient>(instanceName: 'staging');
+```
+
+## Provider Registration
+
+From `locator.dart:27-46`, the Locator interface defines registration methods:
+
+```dart
+abstract class Locator {
+  /// Register a singleton instance
+  void registerSingleton<T extends Object>(
+    T instance, {
+    String? instanceName,
+    bool? signalsReady,
+    DisposingFunc<T>? dispose,
+  });
+
+  /// Register a factory function
+  void registerFactory<T extends Object>(
+    FactoryFunc<T> factoryFunc, {
+    String? instanceName,
+  });
+
+  /// Register a lazy singleton
+  void registerLazySingleton<T extends Object>(
+    FactoryFunc<T> factoryFunc, {
+    String? instanceName,
+    DisposingFunc<T>? dispose,
+  });
+}
+```
+
+## Scoped Registration
+
+Providers are automatically tracked by module:
+
+From `module.dart:241-277`:
+
+```dart
+class _ScopedGetIt implements Locator {
+  @override
+  void registerSingleton<T extends Object>(
+    T instance, {
+    String? instanceName,
+    bool? signalsReady,
+    DisposingFunc<T>? dispose,
+  }) {
+    // Track which module provides this service
+    _context.registerServiceProvider(T, _moduleType);
+    _delegate.registerSingleton<T>(
+      instance,
+      instanceName: instanceName,
+      signalsReady: signalsReady,
+      dispose: dispose,
+    );
+  }
+
+  @override
+  void registerFactory<T extends Object>(
+    FactoryFunc<T> factoryFunc, {
+    String? instanceName,
+  }) {
+    _context.registerServiceProvider(T, _moduleType);
+    _delegate.registerFactory<T>(factoryFunc, instanceName: instanceName);
+  }
+
+  @override
+  void registerLazySingleton<T extends Object>(
+    FactoryFunc<T> factoryFunc, {
+    String? instanceName,
+    DisposingFunc<T>? dispose,
+  }) {
+    _context.registerServiceProvider(T, _moduleType);
+    _delegate.registerLazySingleton<T>(
+      factoryFunc,
+      instanceName: instanceName,
+      dispose: dispose,
+    );
+  }
+}
+```
+
+## Real-World Examples
+
+### HTTP Client Module
+
+```dart
+class HttpModule extends Module {
+  @override
+  Future<void> providers(Locator locator) async {
+    // Singleton for shared configuration
+    locator.registerSingleton<HttpConfig>(
+      HttpConfig(
+        timeout: Duration(seconds: 30),
+        headers: {'User-Agent': 'MyApp/1.0'},
+      ),
+    );
+    
+    // Lazy singleton for the client
+    locator.registerLazySingleton<HttpClient>(
+      () => HttpClient(locator<HttpConfig>()),
+      dispose: (client) => client.close(),
+    );
+    
+    // Factory for request interceptors
+    locator.registerFactory<RequestInterceptor>(
+      () => RequestInterceptor(
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+  
+  @override
+  List<Type> get exports => [HttpClient, RequestInterceptor];
+}
+```
+
+### Repository Pattern
+
+```dart
+class DataModule extends Module {
+  @override
+  List<Module> get imports => [DatabaseModule()];
+  
+  @override
+  Future<void> providers(Locator locator) async {
+    // Lazy singletons for repositories
+    locator.registerLazySingleton<UserRepository>(
+      () => UserRepositoryImpl(
+        db: locator<DatabaseService>(),
+      ),
+    );
+    
+    locator.registerLazySingleton<ProductRepository>(
+      () => ProductRepositoryImpl(
+        db: locator<DatabaseService>(),
+      ),
+    );
+    
+    locator.registerLazySingleton<OrderRepository>(
+      () => OrderRepositoryImpl(
+        db: locator<DatabaseService>(),
+        userRepo: locator<UserRepository>(),
+        productRepo: locator<ProductRepository>(),
+      ),
+    );
+  }
+  
+  @override
+  List<Type> get exports => [
+    UserRepository,
+    ProductRepository,
+    OrderRepository,
+  ];
+}
+```
+
+## Best Practices
+
+<Tip>
+  **Default to Lazy Singleton**: Use lazy singletons for most services unless you have a specific reason to use another type.
+</Tip>
+
+<Tip>
+  **Singleton for Async Init**: Use regular singletons for services that require async initialization in the `providers` method.
+</Tip>
+
+<Tip>
+  **Factory for Stateful**: Use factories for objects that maintain state or should be unique per usage.
+</Tip>
+
+<Warning>
+  Don't mix provider types for the same service type unless using named instances. This can lead to confusion about which instance is returned.
+</Warning>
+
+## Checking Registration
+
+```dart
+// Check if a service is registered
+if (locator.isRegistered<UserService>()) {
+  final service = locator<UserService>();
+}
+
+// Check named instance
+if (locator.isRegistered<ApiClient>(instanceName: 'production')) {
+  final api = locator.get<ApiClient>(instanceName: 'production');
+}
+```
+
+## Next Steps
+
+- Learn about [Dependency Injection](/core/dependency-injection) concepts
+- Understand [Exports](/core/exports) to control provider visibility
+- Explore [Modules](/core/modules) to organize providers
+- Implement [Lifecycle Hooks](/core/lifecycle) for provider initialization
