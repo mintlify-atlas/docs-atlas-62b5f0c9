@@ -1,0 +1,117 @@
+{
+  "projectType": "framework",
+  "projectName": "Nest Dart",
+  "projectDescription": "A NestJS-inspired dependency injection framework for Dart, bringing modular architecture and type-safe service management to Dart applications.",
+  "theme": "aspen",
+  "primaryColor": "#0175C2",
+  "lightColor": "#4FC3F7",
+  "darkColor": "#01579B",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "core/modules",
+              "core/dependency-injection",
+              "core/providers",
+              "core/exports",
+              "core/lifecycle"
+            ]
+          },
+          {
+            "group": "Platform Integration",
+            "pages": [
+              "platforms/flutter",
+              "platforms/dart-frog",
+              "platforms/pure-dart"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/routing",
+              "advanced/middleware",
+              "advanced/testing",
+              "advanced/best-practices"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/flutter-app",
+              "examples/frog-backend"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/core/module",
+              "api/core/application-container",
+              "api/core/locator",
+              "api/core/module-context"
+            ]
+          },
+          {
+            "group": "Flutter",
+            "pages": [
+              "api/flutter/modular-app",
+              "api/flutter/modular",
+              "api/flutter/module",
+              "api/flutter/routing"
+            ]
+          },
+          {
+            "group": "Dart Frog",
+            "pages": [
+              "api/frog/modular",
+              "api/frog/middleware"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Modular architecture with explicit imports and exports",
+    "Type-safe dependency injection powered by GetIt",
+    "Services are private by default with controlled access",
+    "Multi-platform support for Flutter, Dart Frog, and pure Dart",
+    "Module-based routing with GoRouter integration",
+    "Lifecycle hooks for initialization and cleanup",
+    "Middleware support for backend applications"
+  ],
+  "publicApiSurface": [
+    "Module",
+    "ApplicationContainer",
+    "Locator",
+    "ModuleContext",
+    "ModularApp (Flutter)",
+    "Modular (Flutter)",
+    "nestFrogMiddleware (Dart Frog)",
+    "RouteMixin (Flutter)",
+    "registerSingleton",
+    "registerFactory",
+    "registerLazySingleton",
+    "get",
+    "getAsync",
+    "isRegistered",
+    "onModuleInit",
+    "onModuleDestroy"
+  ]
+}
